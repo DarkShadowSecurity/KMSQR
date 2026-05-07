@@ -1,0 +1,16 @@
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+pydantic==2.9.2
+# cryptography pinned to >= 46.0.6 to pick up:
+#   GHSA-79v4-65xg-pq4g (CVE-2024-12797 OpenSSL bundled in wheels, fixed 44.0.1)
+#   GHSA-r6ph-v2qm-q3c2 (SECT subgroup validation, fixed 46.0.5)
+#   GHSA-m959-cc7f-wv43 (X.509 wildcard SAN bypass, fixed 46.0.6)
+cryptography==46.0.6
+argon2-cffi==23.1.0
+slowapi==0.1.9
+# liboqs-python: post-quantum primitives. Version must match the C liboqs
+# installed in the container image (see deploy/Dockerfile LIBOQS_REF).
+# If unavailable at runtime, the KMS degrades to classical-only (X25519 +
+# Ed25519) and tags material with CLASSIC_* suites so it's never confused
+# with hybrid PQ material.
+liboqs-python==0.14.1 ; platform_system != "Windows"

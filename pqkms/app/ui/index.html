@@ -1,0 +1,340 @@
+<!--
+  Copyright (c) 2026 DarkShadowSec LLC. All Rights Reserved.
+  Proprietary and confidential. See LICENSE for terms.
+-->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PQ-KMS :: admin console</title>
+<style>
+  :root {
+    --bg: #0b0d0c;
+    --bg-2: #13161a;
+    --panel: #1a1d22;
+    --line: #2a2f36;
+    --ink: #e8ebe6;
+    --ink-2: #9aa0a6;
+    --accent: #b6ff5c;        /* radioactive green */
+    --accent-dim: #6b9e2f;
+    --danger: #ff5c6f;
+    --warn: #ffb84d;
+    --pq: #7cf3ff;            /* cyan for PQ indicators */
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink);
+    font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace;
+    font-size: 13px; line-height: 1.5;
+  }
+  body {
+    background:
+      radial-gradient(ellipse 80% 50% at 50% -10%, rgba(182,255,92,0.06), transparent 60%),
+      repeating-linear-gradient(0deg, transparent 0, transparent 3px, rgba(255,255,255,0.012) 3px, rgba(255,255,255,0.012) 4px),
+      var(--bg);
+    min-height: 100vh;
+  }
+  header {
+    border-bottom: 1px solid var(--line);
+    padding: 18px 28px;
+    display: flex; align-items: baseline; justify-content: space-between;
+    position: sticky; top: 0; z-index: 10;
+    background: rgba(11,13,12,0.92);
+    backdrop-filter: blur(8px);
+  }
+  .brand {
+    display: flex; align-items: baseline; gap: 14px;
+  }
+  .brand .mark {
+    font-family: ui-serif, Georgia, serif; font-weight: 900;
+    font-size: 28px; letter-spacing: -0.02em;
+    color: var(--accent);
+    text-shadow: 0 0 22px rgba(182,255,92,0.25);
+  }
+  .brand .mark::before { content: '▮ '; color: var(--accent-dim); }
+  .brand .sub { color: var(--ink-2); font-size: 11px; text-transform: uppercase; letter-spacing: 0.2em; }
+  header .status { display: flex; gap: 20px; align-items: center; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px; border: 1px solid var(--line); border-radius: 2px;
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.15em;
+    color: var(--ink-2);
+  }
+  .pill.ok { border-color: var(--accent-dim); color: var(--accent); }
+  .pill.pq { border-color: #1d6b75; color: var(--pq); }
+  .pill .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
+
+  main { padding: 28px; display: grid; gap: 28px; max-width: 1440px; margin: 0 auto; }
+  .grid { display: grid; gap: 20px; }
+  .cols-2 { grid-template-columns: 1fr 1fr; }
+  .cols-3 { grid-template-columns: 1.3fr 1fr 1fr; }
+  @media (max-width: 1100px) { .cols-2, .cols-3 { grid-template-columns: 1fr; } }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 2px;
+    position: relative;
+  }
+  .panel::before {
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px;
+    background: linear-gradient(90deg, transparent, var(--accent-dim), transparent);
+    opacity: 0.4;
+  }
+  .panel h2 {
+    margin: 0; padding: 14px 18px; font-size: 11px; font-weight: 800;
+    letter-spacing: 0.22em; text-transform: uppercase;
+    color: var(--ink-2); border-bottom: 1px solid var(--line);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .panel h2 .count {
+    color: var(--accent); font-weight: 400;
+    background: rgba(182,255,92,0.08); padding: 2px 8px; border-radius: 2px;
+  }
+  .panel-body { padding: 18px; }
+
+  label {
+    display: block; font-size: 10px; letter-spacing: 0.18em;
+    text-transform: uppercase; color: var(--ink-2); margin-bottom: 6px;
+  }
+  input[type=text], input[type=password], select, textarea {
+    width: 100%; background: var(--bg-2); border: 1px solid var(--line);
+    color: var(--ink); padding: 10px 12px; font: inherit; border-radius: 2px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  input:focus, select:focus, textarea:focus {
+    outline: none; border-color: var(--accent-dim);
+    box-shadow: 0 0 0 2px rgba(182,255,92,0.15);
+  }
+  textarea { resize: vertical; min-height: 70px; font-size: 12px; }
+  .field { margin-bottom: 14px; }
+  .row { display: flex; gap: 10px; }
+  .row > * { flex: 1; }
+
+  button {
+    background: var(--accent); color: #0b0d0c;
+    border: 1px solid var(--accent); padding: 10px 18px;
+    font: inherit; font-weight: 600; letter-spacing: 0.08em;
+    text-transform: uppercase; cursor: pointer; border-radius: 2px;
+    transition: all 0.12s;
+  }
+  button:hover { background: #c9ff76; box-shadow: 0 0 16px rgba(182,255,92,0.3); }
+  button:disabled { background: var(--line); border-color: var(--line); color: var(--ink-2); cursor: not-allowed; box-shadow: none; }
+  button.ghost { background: transparent; color: var(--ink); border-color: var(--line); }
+  button.ghost:hover { border-color: var(--accent-dim); color: var(--accent); box-shadow: none; }
+  button.danger { background: var(--danger); color: #0b0d0c; border-color: var(--danger); }
+  button.small { padding: 6px 12px; font-size: 11px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); }
+  th { color: var(--ink-2); font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; font-weight: 400; }
+  td.mono { font-family: inherit; color: var(--ink-2); font-size: 11px; }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+  .kbadge {
+    display: inline-block; padding: 2px 7px; border-radius: 2px;
+    font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+    border: 1px solid var(--line); background: var(--bg-2);
+  }
+  .kbadge.aead { border-color: #6b9e2f; color: var(--accent); }
+  .kbadge.kem { border-color: #1d6b75; color: var(--pq); }
+  .kbadge.sig { border-color: #8a5b9e; color: #c89aff; }
+
+  pre.out {
+    background: #06080a; border: 1px solid var(--line); border-radius: 2px;
+    padding: 12px; margin: 0; font-size: 11px; color: var(--accent);
+    overflow-x: auto; max-height: 240px; white-space: pre-wrap; word-break: break-all;
+  }
+  pre.out.err { color: var(--danger); }
+
+  .token-gate {
+    position: fixed; inset: 0; background: rgba(11,13,12,0.96);
+    display: flex; align-items: center; justify-content: center; z-index: 100;
+    backdrop-filter: blur(6px);
+  }
+  .token-gate .box {
+    background: var(--panel); border: 1px solid var(--line);
+    padding: 32px; width: 420px; max-width: calc(100vw - 40px);
+    border-radius: 2px; position: relative;
+  }
+  .token-gate h1 {
+    font-family: ui-serif, Georgia, serif; font-weight: 900;
+    margin: 0 0 6px; font-size: 28px; color: var(--accent);
+  }
+  .token-gate p { color: var(--ink-2); font-size: 12px; margin: 0 0 22px; }
+
+  .toast {
+    position: fixed; bottom: 24px; right: 24px; z-index: 200;
+    background: var(--panel); border: 1px solid var(--accent-dim);
+    padding: 14px 20px; border-radius: 2px; color: var(--ink);
+    max-width: 380px; font-size: 12px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5), 0 0 24px rgba(182,255,92,0.15);
+    animation: slide-in 0.2s ease-out;
+  }
+  .toast.err { border-color: var(--danger); box-shadow: 0 8px 32px rgba(0,0,0,0.5), 0 0 24px rgba(255,92,111,0.15); }
+  @keyframes slide-in { from { transform: translateX(20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+  .audit-entry {
+    padding: 10px 14px; border-bottom: 1px solid var(--line);
+    display: grid; grid-template-columns: 80px 1fr 160px; gap: 14px; align-items: baseline;
+    font-size: 11px;
+  }
+  .audit-entry .seq { color: var(--accent); font-weight: 600; }
+  .audit-entry .action { color: var(--ink); }
+  .audit-entry .ts { color: var(--ink-2); font-size: 10px; text-align: right; }
+  .audit-entry .detail { color: var(--ink-2); font-size: 10px; margin-top: 2px; }
+
+  .hidden { display: none !important; }
+  .scroll { max-height: 380px; overflow-y: auto; }
+  .scroll::-webkit-scrollbar { width: 8px; }
+  .scroll::-webkit-scrollbar-thumb { background: var(--line); border-radius: 2px; }
+
+  .selected-key {
+    padding: 10px 14px; background: var(--bg-2); border: 1px solid var(--accent-dim);
+    margin-bottom: 14px; font-size: 11px; border-radius: 2px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .selected-key .name { color: var(--accent); font-weight: 600; }
+  .selected-key .id { color: var(--ink-2); }
+</style>
+</head>
+<body>
+
+<div id="gate" class="token-gate">
+  <div class="box">
+    <h1>pq-kms</h1>
+    <p>Bearer token required. Paste the bootstrap admin token printed in the container logs.</p>
+    <div class="field">
+      <label>Admin token</label>
+      <input id="gate-token" type="password" placeholder="pqkms_..." autocomplete="off">
+    </div>
+    <button id="gate-btn" style="width: 100%;">Authenticate</button>
+    <pre id="gate-err" class="out err hidden" style="margin-top: 14px;"></pre>
+  </div>
+</div>
+
+<header class="hidden" id="app-header">
+  <div class="brand">
+    <div class="mark">PQ-KMS</div>
+    <div class="sub">post-quantum key management · v1.0</div>
+  </div>
+  <div class="status">
+    <span class="pill ok"><span class="dot"></span><span id="status-unlocked">unlocked</span></span>
+    <span class="pill pq" id="pq-pill"><span class="dot"></span>PQ: ML-KEM-768 · ML-DSA-65</span>
+    <button class="ghost small" id="logout-btn">lock</button>
+  </div>
+</header>
+
+<main class="hidden" id="app-main">
+
+  <div class="grid cols-3">
+    <section class="panel">
+      <h2><span>Managed keys</span><span class="count" id="keys-count">0</span></h2>
+      <div class="panel-body">
+        <div style="overflow-x: auto;">
+          <table id="keys-table">
+            <thead><tr><th>Name</th><th>Type</th><th>Ver</th><th>Id</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Create key</h2>
+      <div class="panel-body">
+        <div class="field">
+          <label>Name</label>
+          <input id="new-key-name" type="text" placeholder="billing-tokens">
+        </div>
+        <div class="field">
+          <label>Type</label>
+          <select id="new-key-type">
+            <option value="aead">aead — AES-256-GCM symmetric</option>
+            <option value="kem">kem — hybrid X25519 + ML-KEM-768</option>
+            <option value="sig">sig — hybrid Ed25519 + ML-DSA-65</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Description (optional)</label>
+          <input id="new-key-desc" type="text">
+        </div>
+        <button id="new-key-btn" style="width: 100%;">Generate key</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Issue API token</h2>
+      <div class="panel-body">
+        <div class="field">
+          <label>Token name</label>
+          <input id="new-tok-name" type="text" placeholder="billing-service">
+        </div>
+        <div class="field">
+          <label>Scopes</label>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; font-size: 11px;">
+            <label style="letter-spacing: 0; text-transform: none; font-size: 11px;"><input type="checkbox" value="read" checked> read</label>
+            <label style="letter-spacing: 0; text-transform: none; font-size: 11px;"><input type="checkbox" value="encrypt"> encrypt</label>
+            <label style="letter-spacing: 0; text-transform: none; font-size: 11px;"><input type="checkbox" value="decrypt"> decrypt</label>
+            <label style="letter-spacing: 0; text-transform: none; font-size: 11px;"><input type="checkbox" value="sign"> sign</label>
+            <label style="letter-spacing: 0; text-transform: none; font-size: 11px;"><input type="checkbox" value="verify"> verify</label>
+            <label style="letter-spacing: 0; text-transform: none; font-size: 11px;"><input type="checkbox" value="admin"> admin</label>
+          </div>
+        </div>
+        <button id="new-tok-btn" style="width: 100%;">Issue token</button>
+        <pre id="tok-out" class="out hidden" style="margin-top: 14px;"></pre>
+      </div>
+    </section>
+  </div>
+
+  <div class="grid cols-2">
+    <section class="panel">
+      <h2>Operations</h2>
+      <div class="panel-body">
+        <div id="sel-key-display" class="selected-key hidden">
+          <span><span class="name" id="sel-key-name"></span> <span class="id" id="sel-key-id"></span></span>
+          <span class="kbadge" id="sel-key-type"></span>
+        </div>
+        <div id="sel-key-empty" style="color: var(--ink-2); padding: 20px; text-align: center; font-size: 11px;">
+          select a key from the table above to perform operations
+        </div>
+        <div id="ops" class="hidden">
+          <div class="field">
+            <label>Plaintext / message / data-key (base64 or plain)</label>
+            <textarea id="op-input"></textarea>
+          </div>
+          <div class="row" style="margin-bottom: 14px;">
+            <button class="ghost" id="op-encrypt" disabled>encrypt</button>
+            <button class="ghost" id="op-sign" disabled>sign</button>
+            <button class="ghost" id="op-wrap" disabled>wrap</button>
+            <button class="ghost" id="op-rotate">rotate</button>
+          </div>
+          <label>Output</label>
+          <pre id="op-out" class="out">—</pre>
+          <div class="field" style="margin-top: 14px;">
+            <label>Ciphertext / signature (for decrypt / verify / unwrap)</label>
+            <textarea id="op-ct"></textarea>
+          </div>
+          <div class="field">
+            <label>Encapsulation (KEM unwrap only)</label>
+            <textarea id="op-encap"></textarea>
+          </div>
+          <div class="row">
+            <button class="ghost" id="op-decrypt" disabled>decrypt</button>
+            <button class="ghost" id="op-verify" disabled>verify</button>
+            <button class="ghost" id="op-unwrap" disabled>unwrap</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2><span>Audit log</span><button class="ghost small" id="verify-chain-btn" style="letter-spacing: 0.1em;">verify chain</button></h2>
+      <div class="panel-body scroll" id="audit-list" style="padding: 0;"></div>
+    </section>
+  </div>
+
+</main>
+
+<script src="/ui/static/app.js" defer></script>
+</body>
+</html>

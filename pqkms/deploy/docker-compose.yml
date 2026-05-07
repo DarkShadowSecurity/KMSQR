@@ -1,0 +1,43 @@
+services:
+  pqkms:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: pqkms:latest
+    container_name: pqkms
+    restart: unless-stopped
+    environment:
+      # PQKMS_PASSPHRASE is mandatory — the container fails fast if it's unset.
+      # Load it from a secrets manager, HSM, or sealed vault — never bake it
+      # into compose. Consider Shamir-sharing across operators.
+      # Minimum length is enforced at startup (see PQKMS_MIN_PASSPHRASE_LEN).
+      PQKMS_PASSPHRASE: "${PQKMS_PASSPHRASE:?PQKMS_PASSPHRASE must be set in .env or the environment}"
+      PQKMS_DATA_DIR: /var/lib/pqkms
+      # Optional: set to enforce a stricter minimum (default 16).
+      # PQKMS_MIN_PASSPHRASE_LEN: "32"
+      # Optional: cap request body size (bytes; default 16777216 = 16 MiB).
+      # PQKMS_MAX_BODY_BYTES: "16777216"
+    ports:
+      - "8080:8080"
+    volumes:
+      - pqkms-data:/var/lib/pqkms
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8080/\", timeout=2)' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    security_opt:
+      - no-new-privileges:true
+    read_only: false
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  pqkms-data:
+    driver: local
