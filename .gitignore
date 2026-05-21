@@ -69,3 +69,23 @@ Thumbs.db
 
 # Claude Code
 .claude/
+
+# ── Scanner artefacts (regenerable; do NOT commit) ──────────────────────────
+# hiddenshadow / similar vuln scans dump timestamped xlsx workbooks at the
+# repo root. They're produced fresh every run; trying to track them creates
+# huge churn and conflicts.
+hiddenshadow-scan-*.xlsx
+
+# OSV-DB mirror + scan output directories (underscore prefix is the local
+# convention). Regenerable from the scan pipeline.
+_cache/
+_logs/
+sboms/
+
+# Vulnerabilities/ holds two kinds of file:
+#   - REMEDIATION.md — hand-authored; should be committed.
+#   - hiddenshadow-scan-*.xlsx — regenerable.
+# Ignore everything in the directory by default, then unignore the
+# remediation doc explicitly.
+Vulnerabilities/*
+!Vulnerabilities/REMEDIATION.md
