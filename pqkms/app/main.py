@@ -33,7 +33,7 @@ from .storage.audit import AuditLog
 from .api.auth import TokenAuth, SCOPES_ADMIN
 from .api.routes import build_router
 from .crypto.signatures import HybridSigner
-from .crypto.suites import Suite
+from .crypto.suites import Suite, SUITE_NAMES
 from .crypto.aead import AEAD
 
 
@@ -119,7 +119,7 @@ def _load_or_create_audit_signing_key(ks: KeyStore) -> tuple[bytes, bytes, Suite
     packed = struct.pack("!HI", int(kp.suite), len(kp.private_key)) + kp.private_key + kp.public_key
     wrapped = ks._wrap(packed, aad=b"pqkms/audit-signing/v1")
     c.execute("INSERT INTO kms_meta(k,v) VALUES(?,?)", (META_KEY, wrapped))
-    log.info("generated new audit-log signing keypair (%s)", kp.suite.name)
+    log.info("generated new audit-log signing keypair (%s)", SUITE_NAMES[kp.suite])
     return kp.private_key, kp.public_key, kp.suite
 
 
@@ -228,6 +228,30 @@ def create_app() -> FastAPI:
             "api": "/api/v1",
             "pq_available": HybridSigner.is_hybrid_available(),
         })
+
+    @app.get("/health")
+    def health():
+        """Liveness probe — used by docker healthcheck and operator
+        monitoring. Returns 200 if the KeyStore is unlocked (i.e. the
+        passphrase was accepted at boot) and the SQLite DB is reachable.
+        Intentionally unauthenticated — same posture as /; reveals only
+        the unlock + DB-reachable booleans, no secrets.
+        """
+        try:
+            unlocked = ks.is_unlocked() if hasattr(ks, "is_unlocked") else True
+        except Exception:
+            unlocked = False
+        try:
+            db.conn().execute("SELECT 1").fetchone()
+            db_ok = True
+        except Exception:
+            db_ok = False
+        ok = unlocked and db_ok
+        return JSONResponse(
+            status_code=200 if ok else 503,
+            content={"status": "ok" if ok else "degraded",
+                     "unlocked": unlocked, "db": db_ok},
+        )
 
     return app
 
