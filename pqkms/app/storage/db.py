@@ -80,3 +80,16 @@ class Database:
 
     def conn(self) -> sqlite3.Connection:
         return self._connect()
+
+    def checkpoint(self) -> None:
+        """Force a WAL checkpoint so all data is written to the main db file.
+
+        Without periodic checkpoints, all writes accumulate in the WAL.
+        If the process is killed without a clean shutdown, uncommitted WAL
+        pages may be lost — causing decrypt failures for recently encrypted
+        secrets.
+        """
+        try:
+            self._connect().execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except Exception:
+            pass

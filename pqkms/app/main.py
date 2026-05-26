@@ -211,6 +211,16 @@ def create_app() -> FastAPI:
 
     app.include_router(build_router(ks, audit, auth, limiter))
 
+    @app.on_event("startup")
+    async def _checkpoint_on_start():
+        db.checkpoint()
+        log.info("SQLite WAL checkpoint completed on startup")
+
+    @app.on_event("shutdown")
+    async def _checkpoint_on_shutdown():
+        db.checkpoint()
+        log.info("SQLite WAL checkpoint completed on shutdown")
+
     # Admin UI
     ui_dir = Path(__file__).parent / "ui"
     app.mount("/ui/static", StaticFiles(directory=str(ui_dir)), name="ui-static")
