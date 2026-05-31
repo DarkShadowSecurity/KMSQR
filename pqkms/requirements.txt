@@ -1,6 +1,6 @@
-fastapi==0.115.0
-uvicorn[standard]==0.32.0
-pydantic==2.9.2
+fastapi==0.136.3
+uvicorn[standard]==0.48.0
+pydantic==2.13.4
 # cryptography pinned to >= 46.0.7 to pick up:
 #   GHSA-79v4-65xg-pq4g (CVE-2024-12797 OpenSSL bundled in wheels, fixed 44.0.1)
 #   GHSA-r6ph-v2qm-q3c2 (SECT subgroup validation, fixed 46.0.5)
@@ -14,4 +14,4 @@ slowapi==0.1.9
 # If unavailable at runtime, the KMS degrades to classical-only (X25519 +
 # Ed25519) and tags material with CLASSIC_* suites so it's never confused
 # with hybrid PQ material.
-liboqs-python==0.14.1 ; platform_system != "Windows"
+liboqs-python==0.15.0 ; platform_system != "Windows"
