@@ -28,7 +28,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
-from .storage.db import Database
+from .storage.repository import make_repository
 from .storage.keystore import KeyStore
 from .storage.audit import AuditLog
 from .custody import make_custodian
@@ -104,24 +104,21 @@ def _load_or_create_audit_signing_key(ks: KeyStore) -> tuple[bytes, bytes, Suite
     Audit signing keypair is stored as a special meta row, encrypted under the Root KEK.
     This keeps the audit log tamper-evident even if the DB is copied off-box.
     """
+    import struct
     META_KEY = "audit_signing_keypair_v1"
-    c = ks.db.conn()
-    row = c.execute("SELECT v FROM kms_meta WHERE k=?", (META_KEY,)).fetchone()
-    if row:
-        wrapped = bytes(row["v"])
-        raw = ks._unwrap(wrapped, aad=b"pqkms/audit-signing/v1")
+    raw_row = ks.repo.get_meta(META_KEY)
+    if raw_row is not None:
+        raw = ks._unwrap(raw_row, aad=b"pqkms/audit-signing/v1")
         # format: [2B suite][4B priv_len][priv][pub]
-        import struct
         suite_id, priv_len = struct.unpack("!HI", raw[:6])
         priv = raw[6:6+priv_len]
         pub = raw[6+priv_len:]
         return priv, pub, Suite(suite_id)
 
     kp = HybridSigner.generate()
-    import struct
     packed = struct.pack("!HI", int(kp.suite), len(kp.private_key)) + kp.private_key + kp.public_key
     wrapped = ks._wrap(packed, aad=b"pqkms/audit-signing/v1")
-    c.execute("INSERT INTO kms_meta(k,v) VALUES(?,?)", (META_KEY, wrapped))
+    ks.repo.put_meta(META_KEY, wrapped)
     log.info("generated new audit-log signing keypair (%s)", SUITE_NAMES[kp.suite])
     return kp.private_key, kp.public_key, kp.suite
 
@@ -204,27 +201,28 @@ def create_app() -> FastAPI:
 
     data_dir = Path(os.environ.get("PQKMS_DATA_DIR", "/var/lib/pqkms"))
     data_dir.mkdir(parents=True, exist_ok=True)
-    db_path = str(data_dir / "pqkms.sqlite")
 
     passphrase = _load_passphrase()
     min_len = int(os.environ.get("PQKMS_MIN_PASSPHRASE_LEN", DEFAULT_MIN_PASSPHRASE_LEN))
     _validate_passphrase(passphrase, min_len)
 
-    db = Database(db_path)
+    # PQKMS_DB_URL selects the backend (Postgres for HA); defaults to a SQLite
+    # file under the data dir for the single-node quickstart.
+    repo = make_repository(data_dir=str(data_dir))
     custodian = make_custodian(passphrase)
-    ks = KeyStore(db, custodian)
+    ks = KeyStore(repo, custodian)
 
     if not ks.is_initialized():
-        log.info("bootstrapping new KMS at %s (custody backend: %s)", db_path, custodian.backend_id)
+        log.info("bootstrapping new KMS (custody backend: %s)", custodian.backend_id)
         ks.initialize()
     else:
-        log.info("unlocking existing KMS at %s (custody backend: %s)", db_path, custodian.backend_id)
+        log.info("unlocking existing KMS (custody backend: %s)", custodian.backend_id)
         ks.unlock()
 
     audit_priv, audit_pub, audit_suite = _load_or_create_audit_signing_key(ks)
-    audit = AuditLog(db, (audit_priv, audit_pub, audit_suite))
+    audit = AuditLog(repo, (audit_priv, audit_pub, audit_suite))
 
-    auth = TokenAuth(db)
+    auth = TokenAuth(repo)
 
     # bootstrap admin token if none exists
     if not auth.has_any_token():
@@ -249,13 +247,13 @@ def create_app() -> FastAPI:
         # Force a WAL checkpoint at startup and shutdown so committed writes are
         # flushed to the main db file and not stranded in the WAL across an
         # unclean restart. (Replaces the deprecated @app.on_event hooks.)
-        db.checkpoint()
-        log.info("SQLite WAL checkpoint completed on startup")
+        repo.checkpoint()
+        log.info("storage checkpoint completed on startup")
         try:
             yield
         finally:
-            db.checkpoint()
-            log.info("SQLite WAL checkpoint completed on shutdown")
+            repo.checkpoint()
+            log.info("storage checkpoint completed on shutdown")
 
     app = FastAPI(
         title="PQ-KMS",
@@ -321,11 +319,7 @@ def create_app() -> FastAPI:
             unlocked = ks.is_unlocked() if hasattr(ks, "is_unlocked") else True
         except Exception:
             unlocked = False
-        try:
-            db.conn().execute("SELECT 1").fetchone()
-            db_ok = True
-        except Exception:
-            db_ok = False
+        db_ok = repo.ping()
         ok = unlocked and db_ok
         return JSONResponse(
             status_code=200 if ok else 503,

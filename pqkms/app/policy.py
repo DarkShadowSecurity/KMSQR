@@ -38,7 +38,7 @@ class NonceBudgetPolicy:
         self.soft_limit = soft_limit
         self.hard_limit = hard_limit
 
-    def reserve(self, db, key_id: str, version: int) -> int:
+    def reserve(self, repo, key_id: str, version: int) -> int:
         """
         Atomically reserve one encryption slot for (key_id, version).
 
@@ -46,27 +46,15 @@ class NonceBudgetPolicy:
         is reached, KeyError if the version does not exist. Call BEFORE performing
         the encryption so the budget is never overshot.
         """
-        c = db.conn()
-        cur = c.execute(
-            "UPDATE key_versions SET usage_count = usage_count + 1 "
-            "WHERE key_id=? AND version=? AND usage_count < ? "
-            "RETURNING usage_count",
-            (key_id, version, self.hard_limit),
-        )
-        row = cur.fetchone()
-        if row is None:
+        new_count = repo.increment_usage_if_below(key_id, version, self.hard_limit)
+        if new_count is None:
             # Either the version is missing, or the hard cap was hit.
-            exists = c.execute(
-                "SELECT 1 FROM key_versions WHERE key_id=? AND version=?",
-                (key_id, version),
-            ).fetchone()
-            if exists is None:
+            if not repo.version_exists(key_id, version):
                 raise KeyError(f"{key_id}@v{version}")
             raise NonceBudgetExceeded(
                 f"key {key_id} version {version} has reached its AES-GCM nonce "
                 f"budget ({self.hard_limit}); rotate the key before encrypting more"
             )
-        new_count = row["usage_count"]
         if new_count == self.soft_limit:
             log.warning(
                 "key %s version %s crossed the soft nonce budget (%d of %d); "

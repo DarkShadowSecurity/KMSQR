@@ -29,7 +29,7 @@ from ..crypto.kdf import DEFAULT_ARGON2_PARAMS
 from ..crypto.suites import Suite, SUITE_NAMES
 from ..custody import CustodyEnvelope, PassphraseCustodian, RootKeyCustodian
 from ..policy import NonceBudgetPolicy
-from .db import Database
+from .repository import Repository
 
 
 def _now() -> str:
@@ -68,11 +68,11 @@ class KeyStore:
 
     def __init__(
         self,
-        db: Database,
+        repo: Repository,
         custodian: Optional[RootKeyCustodian] = None,
         nonce_policy: Optional[NonceBudgetPolicy] = None,
     ):
-        self.db = db
+        self.repo = repo
         self._custodian = custodian
         self._nonce_policy = nonce_policy or NonceBudgetPolicy()
         self._root_kek: Optional[bytes] = None
@@ -89,11 +89,7 @@ class KeyStore:
     # ---- bootstrap / unlock ----
 
     def is_initialized(self) -> bool:
-        cur = self.db.conn().execute(
-            "SELECT 1 FROM kms_meta WHERE k IN (?, ?) LIMIT 1",
-            (self.META_CUSTODY, self.META_WRAPPED_ROOT),
-        )
-        return cur.fetchone() is not None
+        return self.repo.meta_exists_any([self.META_CUSTODY, self.META_WRAPPED_ROOT])
 
     def initialize(self, passphrase: Optional[str] = None) -> None:
         if self.is_initialized():
@@ -102,11 +98,7 @@ class KeyStore:
         custodian.healthcheck()
         root_kek = AEAD.generate_key()
         envelope = custodian.initialize(root_kek)
-        with self.db.conn() as c:
-            c.execute(
-                "INSERT INTO kms_meta(k,v) VALUES(?,?)",
-                (self.META_CUSTODY, envelope.to_bytes()),
-            )
+        self.repo.put_meta(self.META_CUSTODY, envelope.to_bytes())
         self._root_kek = root_kek
 
     def unlock(self, passphrase: Optional[str] = None) -> None:
@@ -117,16 +109,15 @@ class KeyStore:
         self._root_kek = custodian.unwrap(envelope)
 
     def _load_envelope(self, custodian: RootKeyCustodian) -> CustodyEnvelope:
-        c = self.db.conn()
-        row = c.execute("SELECT v FROM kms_meta WHERE k=?", (self.META_CUSTODY,)).fetchone()
-        if row is not None:
-            return CustodyEnvelope.from_bytes(bytes(row["v"]))
+        raw = self.repo.get_meta(self.META_CUSTODY)
+        if raw is not None:
+            return CustodyEnvelope.from_bytes(raw)
 
         # Legacy fallback: synthesize an envelope from the pre-custodian rows so a
         # passphrase custodian unwraps an old database with no migration step. The
         # legacy AAD and Argon2 params match PassphraseCustodian's defaults exactly.
-        salt = c.execute("SELECT v FROM kms_meta WHERE k=?", (self.META_SALT,)).fetchone()
-        wrapped = c.execute("SELECT v FROM kms_meta WHERE k=?", (self.META_WRAPPED_ROOT,)).fetchone()
+        salt = self.repo.get_meta(self.META_SALT)
+        wrapped = self.repo.get_meta(self.META_WRAPPED_ROOT)
         if salt is None or wrapped is None:
             raise RuntimeError("KMS not initialized")
         if custodian.backend_id != "passphrase":
@@ -136,9 +127,9 @@ class KeyStore:
             )
         return CustodyEnvelope(
             backend_id="passphrase",
-            wrapped_root_kek=bytes(wrapped["v"]),
+            wrapped_root_kek=wrapped,
             metadata={
-                "salt_b64": base64.b64encode(bytes(salt["v"])).decode(),
+                "salt_b64": base64.b64encode(salt).decode(),
                 "argon2": DEFAULT_ARGON2_PARAMS,
             },
         )
@@ -179,20 +170,23 @@ class KeyStore:
         suite, secret, public = self._generate_material(key_type)
         aad = f"pqkms/key/{key_id}/v1".encode()
         wrapped = self._wrap(secret, aad)
+        created_at = _now()
 
-        with self.db.conn() as c:
-            c.execute(
-                "INSERT INTO managed_keys(id,name,key_type,current_version,created_at,description) VALUES(?,?,?,?,?,?)",
-                (key_id, name, key_type, 1, _now(), description),
-            )
-            c.execute(
-                "INSERT INTO key_versions(key_id,version,suite,wrapped_secret,public_material,created_at,state) VALUES(?,?,?,?,?,?,?)",
-                (key_id, 1, int(suite), wrapped, public, _now(), "active"),
-            )
+        self.repo.create_key_with_version(
+            mk={
+                "id": key_id, "name": name, "key_type": key_type,
+                "current_version": 1, "created_at": created_at, "description": description,
+            },
+            kv={
+                "key_id": key_id, "version": 1, "suite": int(suite),
+                "wrapped_secret": wrapped, "public_material": public,
+                "created_at": created_at, "state": "active",
+            },
+        )
 
         return ManagedKey(
             id=key_id, name=name, key_type=key_type, current_version=1,
-            created_at=_now(), description=description, suite=int(suite),
+            created_at=created_at, description=description, suite=int(suite),
             public_material=base64.b64encode(public).decode() if public else None,
         )
 
@@ -207,40 +201,21 @@ class KeyStore:
             return kp.suite, kp.private_key, kp.public_key
         raise ValueError(f"unknown key_type: {key_type}")
 
-    def list_keys(self) -> list[ManagedKey]:
-        c = self.db.conn()
-        rows = c.execute("""
-            SELECT mk.*, kv.suite, kv.public_material
-            FROM managed_keys mk
-            JOIN key_versions kv
-              ON kv.key_id = mk.id AND kv.version = mk.current_version
-            ORDER BY mk.created_at DESC
-        """).fetchall()
-        return [
-            ManagedKey(
-                id=r["id"], name=r["name"], key_type=r["key_type"],
-                current_version=r["current_version"], created_at=r["created_at"],
-                description=r["description"], suite=r["suite"],
-                public_material=base64.b64encode(bytes(r["public_material"])).decode() if r["public_material"] else None,
-            ) for r in rows
-        ]
-
-    def get_key(self, key_id: str) -> Optional[ManagedKey]:
-        c = self.db.conn()
-        r = c.execute("""
-            SELECT mk.*, kv.suite, kv.public_material
-            FROM managed_keys mk
-            JOIN key_versions kv ON kv.key_id = mk.id AND kv.version = mk.current_version
-            WHERE mk.id = ?
-        """, (key_id,)).fetchone()
-        if not r:
-            return None
+    @staticmethod
+    def _row_to_managed_key(r: dict) -> ManagedKey:
         return ManagedKey(
             id=r["id"], name=r["name"], key_type=r["key_type"],
             current_version=r["current_version"], created_at=r["created_at"],
             description=r["description"], suite=r["suite"],
-            public_material=base64.b64encode(bytes(r["public_material"])).decode() if r["public_material"] else None,
+            public_material=base64.b64encode(r["public_material"]).decode() if r["public_material"] else None,
         )
+
+    def list_keys(self) -> list[ManagedKey]:
+        return [self._row_to_managed_key(r) for r in self.repo.list_keys_current()]
+
+    def get_key(self, key_id: str) -> Optional[ManagedKey]:
+        r = self.repo.get_key_current(key_id)
+        return self._row_to_managed_key(r) if r else None
 
     def rotate(self, key_id: str) -> ManagedKey:
         """Generate a new version. Old versions stay available for decrypt/verify."""
@@ -253,34 +228,26 @@ class KeyStore:
         aad = f"pqkms/key/{key_id}/v{new_version}".encode()
         wrapped = self._wrap(secret, aad)
 
-        with self.db.conn() as c:
-            c.execute(
-                "UPDATE key_versions SET state='rotated' WHERE key_id=? AND version=?",
-                (key_id, mk.current_version),
-            )
-            c.execute(
-                "INSERT INTO key_versions(key_id,version,suite,wrapped_secret,public_material,created_at,state) VALUES(?,?,?,?,?,?,?)",
-                (key_id, new_version, int(suite), wrapped, public, _now(), "active"),
-            )
-            c.execute(
-                "UPDATE managed_keys SET current_version=? WHERE id=?",
-                (new_version, key_id),
-            )
+        self.repo.rotate_key(
+            key_id=key_id,
+            old_version=mk.current_version,
+            kv={
+                "key_id": key_id, "version": new_version, "suite": int(suite),
+                "wrapped_secret": wrapped, "public_material": public,
+                "created_at": _now(), "state": "active",
+            },
+            new_version=new_version,
+        )
         return self.get_key(key_id)
 
     def _load_version(self, key_id: str, version: int):
         """Returns (suite, secret_bytes, public_bytes_or_none). Unwraps secret."""
-        c = self.db.conn()
-        r = c.execute(
-            "SELECT suite, wrapped_secret, public_material FROM key_versions WHERE key_id=? AND version=?",
-            (key_id, version),
-        ).fetchone()
-        if not r:
+        r = self.repo.get_version(key_id, version)
+        if r is None:
             raise KeyError(f"{key_id}@v{version}")
         aad = f"pqkms/key/{key_id}/v{version}".encode()
-        secret = self._unwrap(bytes(r["wrapped_secret"]), aad)
-        pub = bytes(r["public_material"]) if r["public_material"] else None
-        return Suite(r["suite"]), secret, pub
+        secret = self._unwrap(r["wrapped_secret"], aad)
+        return Suite(r["suite"]), secret, r["public_material"]
 
     # ---- high-level crypto operations ----
 
@@ -292,7 +259,7 @@ class KeyStore:
         # Reserve one slot in this key-version's AES-GCM nonce budget *before*
         # encrypting. Fails closed (NonceBudgetExceeded) at the hard cap so we
         # never approach the random-96-bit-nonce birthday bound.
-        self._nonce_policy.reserve(self.db, key_id, mk.current_version)
+        self._nonce_policy.reserve(self.repo, key_id, mk.current_version)
         blob = AEAD.encrypt(secret, plaintext, aad)
         # Tag with key_id@version and suite so decrypt can route correctly
         header = struct.pack("!BI", int(suite), mk.current_version)

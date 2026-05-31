@@ -2,14 +2,14 @@
 # Licensed under the MIT License. See LICENSE for terms. Provided "as is", without warranty.
 """Auth / token unit tests."""
 import pytest
-from app.storage.db import Database
+from app.storage.repository import make_repository
 from app.api.auth import TokenAuth, SCOPES_ADMIN, SCOPES_READ
 
 
 @pytest.fixture
 def auth(tmp_path):
-    db = Database(str(tmp_path / "test.db"))
-    return TokenAuth(db)
+    repo = make_repository(f"sqlite:///{(tmp_path / 'test.db').as_posix()}")
+    return TokenAuth(repo)
 
 
 def test_token_roundtrip_verifies(auth):

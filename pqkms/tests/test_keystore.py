@@ -5,40 +5,42 @@ import os
 import tempfile
 import base64
 import pytest
+from sqlalchemy import text
 
-from app.storage.db import Database
+from app.storage.repository import make_repository
 from app.storage.keystore import KeyStore
 from app.storage.audit import AuditLog
 from app.crypto.signatures import HybridSigner
 
 
+def _repo(tmp_path, name="test.db"):
+    return make_repository(f"sqlite:///{(tmp_path / name).as_posix()}")
+
+
 @pytest.fixture
 def ks(tmp_path):
-    db = Database(str(tmp_path / "test.db"))
-    store = KeyStore(db)
+    store = KeyStore(_repo(tmp_path))
     store.initialize("test-passphrase")
     return store
 
 
 def test_passphrase_unlock(tmp_path):
-    db = Database(str(tmp_path / "test.db"))
-    store = KeyStore(db)
+    store = KeyStore(_repo(tmp_path))
     store.initialize("hunter2")
     assert store.is_unlocked()
 
-    # Simulate a restart
-    store2 = KeyStore(db)
+    # Simulate a restart: a fresh handle on the same database file.
+    store2 = KeyStore(_repo(tmp_path))
     assert not store2.is_unlocked()
     store2.unlock("hunter2")
     assert store2.is_unlocked()
 
 
 def test_wrong_passphrase_rejected(tmp_path):
-    db = Database(str(tmp_path / "test.db"))
-    store = KeyStore(db)
+    store = KeyStore(_repo(tmp_path))
     store.initialize("correct")
 
-    store2 = KeyStore(db)
+    store2 = KeyStore(_repo(tmp_path))
     with pytest.raises(ValueError):
         store2.unlock("wrong")
 
@@ -81,13 +83,13 @@ def test_kem_key_wrap_unwrap(ks):
 
 
 def test_audit_chain_tamper_detection(tmp_path):
-    db = Database(str(tmp_path / "test.db"))
-    store = KeyStore(db)
+    repo = _repo(tmp_path)
+    store = KeyStore(repo)
     store.initialize("pass")
 
     # Create an audit log signing keypair
     kp = HybridSigner.generate()
-    audit = AuditLog(db, (kp.private_key, kp.public_key, kp.suite))
+    audit = AuditLog(repo, (kp.private_key, kp.public_key, kp.suite))
 
     audit.append("alice", "test.action", target="t1", detail={"x": 1})
     audit.append("bob", "test.action", target="t2", detail={"x": 2})
@@ -96,8 +98,9 @@ def test_audit_chain_tamper_detection(tmp_path):
     ok, bad = audit.verify_chain()
     assert ok and bad is None
 
-    # Tamper with the middle entry
-    db.conn().execute("UPDATE audit_log SET detail = ? WHERE seq = 2", ('{"x": 999}',))
+    # Tamper with the middle entry directly in storage.
+    with repo.engine.begin() as c:
+        c.execute(text("UPDATE audit_log SET detail = :d WHERE seq = 2"), {"d": '{"x": 999}'})
     ok, bad = audit.verify_chain()
     assert not ok
     assert bad == 2

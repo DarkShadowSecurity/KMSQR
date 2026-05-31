@@ -131,6 +131,7 @@ Before trusting it with real secrets, also:
 | `PQKMS_CUSTODY_BACKEND`      | `passphrase`| Root-KEK custody backend (cloud-KMS / PKCS#11 reserved). |
 | `PQKMS_MAX_BODY_BYTES`        | `16777216`  | Request body size cap (16 MiB).          |
 | `PQKMS_DATA_DIR`              | `/var/lib/pqkms` | SQLite + key-material location.     |
+| `PQKMS_DB_URL`               | (SQLite file) | SQLAlchemy database URL. Set to `postgresql+psycopg://…` for HA / multi-replica. |
 
 \* Required for the `passphrase` custody backend; supply it via `PQKMS_PASSPHRASE`
 or `PQKMS_PASSPHRASE_FILE`.
