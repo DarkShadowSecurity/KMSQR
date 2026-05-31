@@ -218,7 +218,22 @@ def create_app() -> FastAPI:
 
     max_body = int(os.environ.get("PQKMS_MAX_BODY_BYTES", DEFAULT_MAX_BODY_BYTES))
 
-    limiter = Limiter(key_func=get_remote_address, default_limits=["120/minute"])
+    # Rate-limit storage. In-memory is per-process, so it does not hold across
+    # replicas — point PQKMS_REDIS_URL at a shared Redis for HA. Rate limiting
+    # fails OPEN: an in-memory fallback plus swallow_errors means a Redis outage
+    # degrades to local limiting / no limiting rather than denying all traffic
+    # (availability beats strict limiting for a KMS). The nonce budget, by
+    # contrast, fails CLOSED — see app/policy.py.
+    redis_url = os.environ.get("PQKMS_REDIS_URL")
+    limiter_kwargs = dict(key_func=get_remote_address, default_limits=["120/minute"])
+    if redis_url:
+        limiter_kwargs.update(
+            storage_uri=redis_url,
+            in_memory_fallback_enabled=True,
+            swallow_errors=True,
+        )
+    limiter = Limiter(**limiter_kwargs)
+    log.info("rate-limit storage: %s", "redis (shared)" if redis_url else "in-memory (per-process)")
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):

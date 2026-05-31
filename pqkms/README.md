@@ -105,6 +105,12 @@ defenses enabled out of the box:
 
 Before trusting it with real secrets, also:
 
+- Run multiple replicas behind a load balancer. Set `PQKMS_DB_URL` to a shared
+  PostgreSQL and `PQKMS_REDIS_URL` to a shared Redis (install the extras:
+  `pip install -r requirements.txt -r requirements-ha.txt`). With Postgres as the
+  shared store the AES-GCM nonce budget stays correct and fail-closed across
+  replicas (it is an atomic `UPDATE … RETURNING`), and audit appends are
+  serialized with a fork-proof `UNIQUE(prev_hash)` index.
 - Put it behind mTLS with PQC-hybrid TLS (OpenSSL 3.5+ with `X25519MLKEM768`).
 - Move the Root KEK into an HSM (CloudHSM, Thales Luna, Entrust nShield — all
   now ship PQC firmware).
@@ -138,6 +144,7 @@ Before trusting it with real secrets, also:
 | `PQKMS_DATA_DIR`              | `/var/lib/pqkms` | SQLite + key-material location.     |
 | `PQKMS_DB_URL`               | (SQLite file) | SQLAlchemy database URL. Set to `postgresql+psycopg://…` for HA / multi-replica. |
 | `PQKMS_AUDIT_LOG_FILE`       | (unset)     | Path to an append-only file; every audit entry is also fsync'd here as JSONL for off-box WORM verification. |
+| `PQKMS_REDIS_URL`            | (in-memory) | Shared rate-limit storage across replicas, e.g. `redis://redis:6379/0`. Fails open (local fallback) if Redis is unreachable. |
 
 \* Required for the `passphrase` custody backend; supply it via `PQKMS_PASSPHRASE`
 or `PQKMS_PASSPHRASE_FILE`.

@@ -1,0 +1,11 @@
+# Optional dependencies for the high-availability (multi-replica) topology.
+# Install on top of requirements.txt only when running the HA compose stack:
+#   pip install -r requirements.txt -r requirements-ha.txt
+#
+# Not needed for the single-node SQLite quickstart.
+
+# PostgreSQL driver — used when PQKMS_DB_URL=postgresql+psycopg://...
+psycopg[binary]==3.2.3
+
+# Shared rate-limit storage across replicas — used when PQKMS_REDIS_URL=redis://...
+redis==5.2.1
