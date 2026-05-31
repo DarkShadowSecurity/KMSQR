@@ -30,14 +30,13 @@ from slowapi.util import get_remote_address
 
 from .storage.repository import make_repository
 from .storage.keystore import KeyStore
-from .storage.audit import AuditLog
+from .storage.audit import AuditLog, load_or_create_audit_signing_key
+from .storage.audit_sink import make_audit_sink
 from .custody import make_custodian
 from .api.auth import TokenAuth, SCOPES_ADMIN
 from .api.routes import build_router
 from .crypto.kem import HybridKEM
 from .crypto.signatures import HybridSigner
-from .crypto.suites import Suite, SUITE_NAMES
-from .crypto.aead import AEAD
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s :: %(message)s")
@@ -97,30 +96,6 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         resp.headers.setdefault("X-Frame-Options", "DENY")
         resp.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
         return resp
-
-
-def _load_or_create_audit_signing_key(ks: KeyStore) -> tuple[bytes, bytes, Suite]:
-    """
-    Audit signing keypair is stored as a special meta row, encrypted under the Root KEK.
-    This keeps the audit log tamper-evident even if the DB is copied off-box.
-    """
-    import struct
-    META_KEY = "audit_signing_keypair_v1"
-    raw_row = ks.repo.get_meta(META_KEY)
-    if raw_row is not None:
-        raw = ks._unwrap(raw_row, aad=b"pqkms/audit-signing/v1")
-        # format: [2B suite][4B priv_len][priv][pub]
-        suite_id, priv_len = struct.unpack("!HI", raw[:6])
-        priv = raw[6:6+priv_len]
-        pub = raw[6+priv_len:]
-        return priv, pub, Suite(suite_id)
-
-    kp = HybridSigner.generate()
-    packed = struct.pack("!HI", int(kp.suite), len(kp.private_key)) + kp.private_key + kp.public_key
-    wrapped = ks._wrap(packed, aad=b"pqkms/audit-signing/v1")
-    ks.repo.put_meta(META_KEY, wrapped)
-    log.info("generated new audit-log signing keypair (%s)", SUITE_NAMES[kp.suite])
-    return kp.private_key, kp.public_key, kp.suite
 
 
 def _validate_passphrase(passphrase: str, min_len: int) -> None:
@@ -219,13 +194,16 @@ def create_app() -> FastAPI:
         log.info("unlocking existing KMS (custody backend: %s)", custodian.backend_id)
         ks.unlock()
 
-    audit_priv, audit_pub, audit_suite = _load_or_create_audit_signing_key(ks)
-    audit = AuditLog(repo, (audit_priv, audit_pub, audit_suite))
+    audit_keypair = load_or_create_audit_signing_key(ks)
+    audit_sink = make_audit_sink(os.environ.get("PQKMS_AUDIT_LOG_FILE"))
+    audit = AuditLog(repo, audit_keypair, sink=audit_sink)
 
     auth = TokenAuth(repo)
 
-    # bootstrap admin token if none exists
-    if not auth.has_any_token():
+    # Bootstrap admin token if none exists. The if_absent sentinel makes this
+    # single-shot across replicas: only the winner creates and prints the token,
+    # so it isn't minted (or logged) once per replica on a cold HA start.
+    if not auth.has_any_token() and repo.put_meta("bootstrap_admin_issued_v1", b"1", if_absent=True):
         tid, raw = auth.create_token(name="bootstrap-admin", scopes={SCOPES_ADMIN})
         log.warning("=" * 72)
         log.warning("BOOTSTRAP ADMIN TOKEN (only shown once, save it now):")

@@ -98,8 +98,13 @@ class KeyStore:
         custodian.healthcheck()
         root_kek = AEAD.generate_key()
         envelope = custodian.initialize(root_kek)
-        self.repo.put_meta(self.META_CUSTODY, envelope.to_bytes())
-        self._root_kek = root_kek
+        # if_absent makes bootstrap race-safe across replicas: only the first
+        # writer's Root KEK becomes authoritative. A loser discards its freshly
+        # generated key and unlocks from the envelope that actually landed.
+        if self.repo.put_meta(self.META_CUSTODY, envelope.to_bytes(), if_absent=True):
+            self._root_kek = root_kek
+        else:
+            self._root_kek = custodian.unwrap(self._load_envelope(custodian))
 
     def unlock(self, passphrase: Optional[str] = None) -> None:
         if not self.is_initialized():

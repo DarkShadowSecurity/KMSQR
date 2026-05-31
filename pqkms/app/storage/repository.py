@@ -25,6 +25,10 @@ from sqlalchemy.exc import IntegrityError
 from .engine import make_engine
 from .schema import api_tokens, audit_log, key_versions, kms_meta, managed_keys, metadata
 
+# Fixed key for the PostgreSQL advisory lock that serializes audit appends across
+# replicas. Arbitrary but stable 63-bit constant ("pqkms-audit" mod 2^63-ish).
+_AUDIT_LOCK_KEY = 0x70716B6D7341756  # noqa: N816
+
 
 def _b(v) -> Optional[bytes]:
     return bytes(v) if v is not None else None
@@ -58,6 +62,10 @@ class Repository:
             cols = {c["name"] for c in insp.get_columns("api_tokens")}
             if "expires_at" not in cols:
                 stmts.append("ALTER TABLE api_tokens ADD COLUMN expires_at TEXT")
+        # Fork guard for the audit hash-chain: two entries can never claim the
+        # same predecessor. A UNIQUE INDEX (rather than a table constraint) is
+        # addable to pre-existing tables and works on both SQLite and Postgres.
+        stmts.append("CREATE UNIQUE INDEX IF NOT EXISTS uq_audit_prev_hash ON audit_log (prev_hash)")
         if stmts:
             with self._engine.begin() as conn:
                 for s in stmts:
@@ -191,19 +199,36 @@ class Repository:
 
     # --------------------------------------------------------------- audit ----
 
-    def append_audit(self, build: Callable[[bytes], dict]) -> int:
-        """Append one audit entry atomically: read the last entry_hash, let the
-        caller build the row from it (hash-chain link + signature), and insert —
-        all in a single transaction so the chain cannot fork under a single
-        writer. (HA serialization across replicas is added in a later phase.)"""
-        with self._engine.begin() as conn:
-            last = conn.execute(
-                select(audit_log.c.entry_hash).order_by(audit_log.c.seq.desc()).limit(1)
-            ).fetchone()
-            prev_hash = _b(last[0]) if last else b"\x00" * 32
-            row = build(prev_hash)
-            seq = conn.execute(insert(audit_log).values(**row).returning(audit_log.c.seq)).scalar_one()
-        return seq
+    def append_audit(self, build: Callable[[bytes], dict], *, max_retries: int = 8) -> int:
+        """Append one audit entry atomically and HA-safely.
+
+        Within a single transaction: read the last entry_hash, let the caller
+        build the row (hash-chain link + signature) from it, and insert. On
+        PostgreSQL a transaction-scoped advisory lock serializes appends across
+        replicas. The UNIQUE(prev_hash) index is the hard guarantee on every
+        backend: a losing concurrent appender hits an IntegrityError, and we
+        retry from the new chain head rather than fork."""
+        is_pg = self._engine.dialect.name == "postgresql"
+        for attempt in range(max_retries):
+            try:
+                with self._engine.begin() as conn:
+                    if is_pg:
+                        conn.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _AUDIT_LOCK_KEY})
+                    last = conn.execute(
+                        select(audit_log.c.entry_hash).order_by(audit_log.c.seq.desc()).limit(1)
+                    ).fetchone()
+                    prev_hash = _b(last[0]) if last else b"\x00" * 32
+                    row = build(prev_hash)
+                    seq = conn.execute(
+                        insert(audit_log).values(**row).returning(audit_log.c.seq)
+                    ).scalar_one()
+                return seq
+            except IntegrityError:
+                # A concurrent appender took this prev_hash slot; rebuild from the
+                # new head and retry. Re-raise if we exhaust the retry budget.
+                if attempt == max_retries - 1:
+                    raise
+        raise RuntimeError("unreachable")
 
     _AUDIT_FULL = (
         audit_log.c.seq,

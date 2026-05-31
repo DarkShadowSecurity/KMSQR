@@ -109,7 +109,12 @@ Before trusting it with real secrets, also:
 - Move the Root KEK into an HSM (CloudHSM, Thales Luna, Entrust nShield — all
   now ship PQC firmware).
 - Use Shamir secret sharing for the bootstrap passphrase.
-- Stream audit logs to an append-only transparency log or WORM storage.
+- Stream audit logs to an append-only transparency log or WORM storage. Set
+  `PQKMS_AUDIT_LOG_FILE` to mirror every signed entry to an append-only JSONL
+  file (point it at a `chattr +a` mount or object storage with retention), then
+  cross-check it against the database chain with
+  `python -m app.cli.audit verify`. Audit appends are serialized and a
+  `UNIQUE(prev_hash)` index makes the hash-chain fork-proof even across replicas.
 - Pin the Python base image by digest and rebuild on a security cadence.
 - **Revoke the bootstrap admin token** after issuing scoped operational tokens:
   `DELETE /api/v1/tokens/<bootstrap-tid>`. The startup log prints the token id
@@ -132,6 +137,7 @@ Before trusting it with real secrets, also:
 | `PQKMS_MAX_BODY_BYTES`        | `16777216`  | Request body size cap (16 MiB).          |
 | `PQKMS_DATA_DIR`              | `/var/lib/pqkms` | SQLite + key-material location.     |
 | `PQKMS_DB_URL`               | (SQLite file) | SQLAlchemy database URL. Set to `postgresql+psycopg://…` for HA / multi-replica. |
+| `PQKMS_AUDIT_LOG_FILE`       | (unset)     | Path to an append-only file; every audit entry is also fsync'd here as JSONL for off-box WORM verification. |
 
 \* Required for the `passphrase` custody backend; supply it via `PQKMS_PASSPHRASE`
 or `PQKMS_PASSPHRASE_FILE`.
