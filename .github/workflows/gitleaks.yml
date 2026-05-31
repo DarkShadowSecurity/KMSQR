@@ -1,0 +1,33 @@
+name: Secret scan (gitleaks)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 8 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  gitleaks:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        # actions/checkout v4.2.2 — pinned by SHA. fetch-depth: 0 so gitleaks
+        # can scan the full commit history, not just the latest commit.
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        # gitleaks/gitleaks-action v2.3.9 — pinned by SHA.
+        uses: gitleaks/gitleaks-action@83373cf2f8c4db6e24b41c1a9b086bb9619e9cd3
+        env:
+          # GITLEAKS_LICENSE is only required for GitHub *organisations*. For a
+          # user-owned public repo this can be omitted. Add it as a repo secret
+          # if you move the repo under an org account.
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}

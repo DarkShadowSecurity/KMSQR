@@ -1,0 +1,37 @@
+version: 2
+updates:
+  # Python dependencies for the PQ-KMS application.
+  - package-ecosystem: "pip"
+    directory: "/pqkms"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "security"
+    groups:
+      # Batch routine version bumps into one PR; security updates still come
+      # through individually so they are easy to review and merge fast.
+      python-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # GitHub Actions used by the CI/security workflows. Pin actions by commit
+  # SHA in the workflow files; Dependabot will propose SHA bumps here.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "ci"
+
+  # Base image and build dependencies in the container.
+  - package-ecosystem: "docker"
+    directory: "/pqkms/deploy"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "docker"
