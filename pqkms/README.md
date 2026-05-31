@@ -150,9 +150,15 @@ Before trusting it with real secrets, also:
   replicas (it is an atomic `UPDATE … RETURNING`), and audit appends are
   serialized with a fork-proof `UNIQUE(prev_hash)` index.
 - Put it behind mTLS with PQC-hybrid TLS (OpenSSL 3.5+ with `X25519MLKEM768`).
-- Move the Root KEK into an HSM (CloudHSM, Thales Luna, Entrust nShield — all
-  now ship PQC firmware).
-- Use Shamir secret sharing for the bootstrap passphrase.
+- Move the Root KEK into an HSM or cloud KMS via the pluggable custody backends
+  (`PQKMS_CUSTODY_BACKEND`): `awskms`, `gcpkms`, or `pkcs11` (CloudHSM, Thales
+  Luna, Entrust nShield, SoftHSM for testing). Install the matching optional
+  dependency from `requirements-custody.txt`.
+- Use Shamir secret sharing for the operator passphrase
+  (`PQKMS_CUSTODY_BACKEND=shamir`): split it with
+  `python -m app.cli.shamir split --n 5 --k 3` and supply K shares at boot via
+  `PQKMS_SHAMIR_SHARE_FILES` / `PQKMS_SHAMIR_SHARES`. The reconstructed
+  passphrase is interchangeable with the `passphrase` backend's envelope.
 - Stream audit logs to an append-only transparency log or WORM storage. Set
   `PQKMS_AUDIT_LOG_FILE` to mirror every signed entry to an append-only JSONL
   file (point it at a `chattr +a` mount or object storage with retention), then
@@ -177,7 +183,7 @@ Before trusting it with real secrets, also:
 | `PQKMS_PASSPHRASE_FILE`       | (unset)     | Path to a secret file holding the passphrase; takes precedence over `PQKMS_PASSPHRASE`. |
 | `PQKMS_MIN_PASSPHRASE_LEN`    | `16`        | Reject shorter passphrases at startup.   |
 | `PQKMS_REQUIRE_PQ`           | `1`         | Refuse to start without liboqs (post-quantum). Set `0` to allow classical-only. |
-| `PQKMS_CUSTODY_BACKEND`      | `passphrase`| Root-KEK custody backend (cloud-KMS / PKCS#11 reserved). |
+| `PQKMS_CUSTODY_BACKEND`      | `passphrase`| Root-KEK custody backend: `passphrase`, `shamir`, `awskms`, `gcpkms`, or `pkcs11`. |
 | `PQKMS_MAX_BODY_BYTES`        | `16777216`  | Request body size cap (16 MiB).          |
 | `PQKMS_DATA_DIR`              | `/var/lib/pqkms` | SQLite + key-material location.     |
 | `PQKMS_DB_URL`               | (SQLite file) | SQLAlchemy database URL. Set to `postgresql+psycopg://…` for HA / multi-replica. |
