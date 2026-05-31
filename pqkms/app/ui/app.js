@@ -1,5 +1,5 @@
-// Copyright (c) 2026 DarkShadowSec LLC. All Rights Reserved.
-// Proprietary and confidential. See LICENSE for terms.
+// Copyright (c) 2026 DarkShadowSec LLC.
+// Licensed under the MIT License. See LICENSE for terms. Provided "as is", without warranty.
 const API = '/api/v1';
 let TOKEN = sessionStorage.getItem('pqkms_token') || '';
 let selectedKey = null;

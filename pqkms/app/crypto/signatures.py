@@ -1,5 +1,5 @@
-# Copyright (c) 2026 DarkShadowSec LLC. All Rights Reserved.
-# Proprietary and confidential. See LICENSE for terms.
+# Copyright (c) 2026 DarkShadowSec LLC.
+# Licensed under the MIT License. See LICENSE for terms. Provided "as is", without warranty.
 """
 Hybrid signatures: Ed25519 (classical) + ML-DSA-65 (post-quantum).
 

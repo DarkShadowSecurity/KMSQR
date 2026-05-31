@@ -1,0 +1,22 @@
+# Code owners for PQ-KMS.
+# These owners are automatically requested for review on matching PRs.
+# Combined with a branch-protection rule that requires review from Code Owners,
+# nobody can merge changes to sensitive paths without your approval.
+
+# Default owner for everything in the repo.
+*                       @DarkShadowSecurity
+
+# Cryptographic core — highest scrutiny. Any change here must be reviewed.
+/pqkms/app/crypto/      @DarkShadowSecurity
+
+# Authentication, API surface, and storage/audit layers.
+/pqkms/app/api/         @DarkShadowSecurity
+/pqkms/app/storage/     @DarkShadowSecurity
+
+# Deployment and build — supply-chain sensitive.
+/pqkms/deploy/          @DarkShadowSecurity
+/pqkms/requirements.txt @DarkShadowSecurity
+
+# CI / security automation and policy.
+/.github/               @DarkShadowSecurity
+/SECURITY.md            @DarkShadowSecurity

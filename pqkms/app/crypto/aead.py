@@ -1,5 +1,5 @@
-# Copyright (c) 2026 DarkShadowSec LLC. All Rights Reserved.
-# Proprietary and confidential. See LICENSE for terms.
+# Copyright (c) 2026 DarkShadowSec LLC.
+# Licensed under the MIT License. See LICENSE for terms. Provided "as is", without warranty.
 """AES-256-GCM authenticated encryption. Quantum-resistant at the 128-bit PQ security level."""
 import os
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM

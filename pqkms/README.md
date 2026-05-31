@@ -114,13 +114,12 @@ Before trusting it with real secrets, also:
 
 ## License
 
-PQ-KMS is **proprietary software**.
+PQ-KMS is free and open-source software, released under the **MIT License**.
 
-> Copyright (c) 2026 DarkShadowSec LLC. All Rights Reserved.
+> Copyright (c) 2026 DarkShadowSec LLC
 
-See [`LICENSE`](LICENSE) for the full terms. No right to use, copy, modify,
-or distribute this software is granted without prior written permission
-from DarkShadowSec LLC. Third-party dependencies remain governed by their
-own (permissive) licenses, listed in [`NOTICES.md`](NOTICES.md).
-
-For commercial licensing or evaluation access, contact DarkShadowSec LLC.
+You are free to use, copy, modify, and distribute it, including commercially,
+provided the copyright notice and the MIT permission notice are retained. The
+software is provided **"as is", without warranty of any kind** — see
+[`LICENSE`](LICENSE) for the full terms. Third-party dependencies remain
+governed by their own licenses, listed in [`NOTICES.md`](NOTICES.md).

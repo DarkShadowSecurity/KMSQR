@@ -1,0 +1,46 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly full scan (Mondays 07:00 UTC) to catch advisories in code paths
+    # that have not changed recently.
+    - cron: "0 7 * * 1"
+
+# Least-privilege default; the analyze job elevates only what it needs.
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (python)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # upload results to the Security tab
+      actions: read
+
+    steps:
+      - name: Checkout
+        # actions/checkout v4.2.2 — pinned by SHA (Dependabot will bump this).
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Initialize CodeQL
+        # github/codeql-action v3.27.0 — pinned by SHA.
+        uses: github/codeql-action/init@662472033e021d55d94146f66f6058822b0b39fd
+        with:
+          languages: python
+          # 'security-extended' adds higher-recall security queries beyond the
+          # default suite — appropriate for a cryptographic project.
+          queries: security-extended
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@662472033e021d55d94146f66f6058822b0b39fd
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@662472033e021d55d94146f66f6058822b0b39fd
+        with:
+          category: "/language:python"

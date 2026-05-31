@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# Copyright (c) 2026 DarkShadowSec LLC. All Rights Reserved.
-# Proprietary and confidential. See LICENSE for terms.
+# Copyright (c) 2026 DarkShadowSec LLC.
+# Licensed under the MIT License. See LICENSE for terms. Provided "as is", without warranty.
 """End-to-end HTTP integration test for PQ-KMS. Self-contained — spawns its own server."""
 import os, sys, base64, json, time, shutil, signal, subprocess, urllib.request, urllib.error, re
 

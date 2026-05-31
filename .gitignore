@@ -44,6 +44,9 @@ coverage.xml
 # Environments / secrets
 .env
 .env.*
+# ...but the committed template MUST ship (README quick-start references it).
+!.env.example
+!**/.env.example
 *.key
 *.pem
 secrets/
