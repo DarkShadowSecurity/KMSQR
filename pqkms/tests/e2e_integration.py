@@ -1,35 +1,75 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 DarkShadowSec LLC.
 # Licensed under the MIT License. See LICENSE for terms. Provided "as is", without warranty.
-"""End-to-end HTTP integration test for PQ-KMS. Self-contained — spawns its own server."""
-import os, sys, base64, json, time, shutil, signal, subprocess, urllib.request, urllib.error, re
+"""End-to-end HTTP integration test for PQ-KMS. Self-contained — spawns its own server.
 
-PORT = 8080
+Cross-platform: uses a temp data dir / log file (no hard-coded /tmp) and a
+portable process-group teardown so it runs on Windows as well as POSIX. The
+PQ-availability assertion is gated on liboqs being importable, so the suite
+still passes on a classical-only host (e.g. Windows dev box without liboqs);
+it prints a clear warning instead of failing in that case.
+"""
+import os, sys, base64, json, time, shutil, signal, subprocess, tempfile, urllib.request, urllib.error, re
+
+# Windows consoles default to cp1252 and choke on the ✓/✗ glyphs. Prefer UTF-8;
+# fall back to ASCII marks if the stream still can't encode them.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+_UNICODE_OK = (getattr(sys.stdout, "encoding", "") or "").lower().replace("-", "") in ("utf8", "utf16", "utf32")
+MARK_OK = "\033[32m✓\033[0m" if _UNICODE_OK else "\033[32m[OK]\033[0m"
+MARK_BAD = "\033[31m✗\033[0m" if _UNICODE_OK else "\033[31m[XX]\033[0m"
+
+PORT = int(os.environ.get("PQKMS_E2E_PORT", "8080"))
 BASE = f"http://127.0.0.1:{PORT}/api/v1"
-DATA_DIR = "/tmp/pqkms-e2e-data"
-LOG_FILE = "/tmp/pqkms-e2e.log"
+_TMP = tempfile.mkdtemp(prefix="pqkms-e2e-")
+DATA_DIR = os.path.join(_TMP, "data")
+LOG_FILE = os.path.join(_TMP, "server.log")
+
+# Is liboqs available here? Drives whether we *require* PQ to be active.
+try:
+    import oqs  # noqa: F401
+    PQ_EXPECTED = True
+except Exception:
+    PQ_EXPECTED = False
 
 # ---- spawn server ----
 shutil.rmtree(DATA_DIR, ignore_errors=True)
 os.makedirs(DATA_DIR, exist_ok=True)
-env = {**os.environ, "PQKMS_DATA_DIR": DATA_DIR, "PQKMS_PASSPHRASE": "e2e-test-phrase", "PYTHONWARNINGS": "ignore"}
+env = {**os.environ, "PQKMS_DATA_DIR": DATA_DIR, "PQKMS_PASSPHRASE": "e2e-test-passphrase-16+", "PYTHONWARNINGS": "ignore"}
+# On a classical-only host (no liboqs) the server would refuse to start with
+# PQKMS_REQUIRE_PQ on (the default), so opt out explicitly for the e2e run.
+if not PQ_EXPECTED:
+    env["PQKMS_REQUIRE_PQ"] = "0"
 repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 logf = open(LOG_FILE, "w")
+# start_new_session (POSIX) / CREATE_NEW_PROCESS_GROUP (Windows) put the child
+# in its own group so we can tear it down cleanly on either platform.
+_popen_kwargs = {}
+if os.name == "nt":
+    _popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+else:
+    _popen_kwargs["start_new_session"] = True
 proc = subprocess.Popen(
     [sys.executable, "-W", "ignore", "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(PORT)],
     cwd=repo_root, env=env, stdout=logf, stderr=subprocess.STDOUT,
-    start_new_session=True,
+    **_popen_kwargs,
 )
-print(f"Spawned server pid={proc.pid}")
+print(f"Spawned server pid={proc.pid} (PQ_EXPECTED={PQ_EXPECTED})")
 
 def shutdown():
     try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        if os.name == "nt":
+            proc.terminate()  # no killpg on Windows; uvicorn runs in-process here
+        else:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
         proc.wait(timeout=5)
     except Exception:
         try: proc.kill()
         except Exception: pass
     logf.close()
+    shutil.rmtree(_TMP, ignore_errors=True)
 
 import atexit
 atexit.register(shutdown)
@@ -74,7 +114,7 @@ def b64e(s): return base64.b64encode(s if isinstance(s, bytes) else s.encode()).
 def b64d(s): return base64.b64decode(s)
 
 def check(name, cond, detail=""):
-    mark = "\033[32m✓\033[0m" if cond else "\033[31m✗\033[0m"
+    mark = MARK_OK if cond else MARK_BAD
     print(f"  {mark} {name}" + (f"  ({detail})" if detail else ""))
     if not cond: sys.exit(1)
 
@@ -85,7 +125,10 @@ print("1. Service status")
 s, r = call("GET", "/status")
 check("GET /status returns 200", s == 200)
 check("KMS is unlocked", r["unlocked"])
-check("PQ algorithms available", r["pq_available"], "ML-KEM-768 + ML-DSA-65")
+if PQ_EXPECTED:
+    check("PQ algorithms available", r["pq_available"], "ML-KEM-768 + ML-DSA-65")
+else:
+    print("  \033[33m!\033[0m liboqs not present — running classical-only (PQ assertions skipped)")
 
 # 2. Create each key type
 print("\n2. Key creation")
@@ -179,4 +222,4 @@ try:
 except urllib.error.HTTPError as e:
     check("invalid token rejected", e.code == 401)
 
-print("\n\033[32m✓ All end-to-end checks passed.\033[0m\n")
+print(f"\n{MARK_OK} All end-to-end checks passed.\n")

@@ -25,8 +25,10 @@ from typing import Optional
 from ..crypto.aead import AEAD
 from ..crypto.kem import HybridKEM
 from ..crypto.signatures import HybridSigner
-from ..crypto.kdf import derive_from_passphrase, derive_key
+from ..crypto.kdf import DEFAULT_ARGON2_PARAMS
 from ..crypto.suites import Suite, SUITE_NAMES
+from ..custody import CustodyEnvelope, PassphraseCustodian, RootKeyCustodian
+from ..policy import NonceBudgetPolicy
 from .db import Database
 
 
@@ -56,54 +58,90 @@ class KeyStore:
     to unlock it. The Root KEK never leaves memory in plaintext after that.
     """
 
+    # Legacy meta keys (pre-custodian format). Retained read-only so databases
+    # created before pluggable custody unlock transparently.
     META_SALT = "root_kek_salt"
     META_WRAPPED_ROOT = "root_kek_wrapped"
-    META_ROOT_CHECK = "root_kek_check"  # for passphrase verification
+    META_ROOT_CHECK = "root_kek_check"
+    # Current format: a single self-describing custody envelope.
+    META_CUSTODY = "root_kek_custody_v1"
 
-    def __init__(self, db: Database):
+    def __init__(
+        self,
+        db: Database,
+        custodian: Optional[RootKeyCustodian] = None,
+        nonce_policy: Optional[NonceBudgetPolicy] = None,
+    ):
         self.db = db
+        self._custodian = custodian
+        self._nonce_policy = nonce_policy or NonceBudgetPolicy()
         self._root_kek: Optional[bytes] = None
+
+    def _resolve_custodian(self, passphrase: Optional[str]) -> RootKeyCustodian:
+        """Use the configured custodian if present; otherwise, for backward
+        compatibility, build a passphrase custodian from a passphrase argument."""
+        if self._custodian is not None:
+            return self._custodian
+        if passphrase is not None:
+            return PassphraseCustodian(passphrase)
+        raise RuntimeError("no custodian configured and no passphrase provided")
 
     # ---- bootstrap / unlock ----
 
     def is_initialized(self) -> bool:
         cur = self.db.conn().execute(
-            "SELECT 1 FROM kms_meta WHERE k = ?", (self.META_WRAPPED_ROOT,)
+            "SELECT 1 FROM kms_meta WHERE k IN (?, ?) LIMIT 1",
+            (self.META_CUSTODY, self.META_WRAPPED_ROOT),
         )
         return cur.fetchone() is not None
 
-    def initialize(self, passphrase: str) -> None:
+    def initialize(self, passphrase: Optional[str] = None) -> None:
         if self.is_initialized():
             raise RuntimeError("KMS already initialized")
-        salt = os.urandom(32)
-        wrapping_key = derive_from_passphrase(passphrase, salt)
+        custodian = self._resolve_custodian(passphrase)
+        custodian.healthcheck()
         root_kek = AEAD.generate_key()
-        wrapped = AEAD.encrypt(wrapping_key, root_kek, aad=b"pqkms/root-kek/v1")
-        # Verification value: encrypt a known plaintext so we can detect wrong passphrases
-        check = AEAD.encrypt(wrapping_key, b"pqkms-check", aad=b"pqkms/root-kek-check/v1")
-
+        envelope = custodian.initialize(root_kek)
         with self.db.conn() as c:
-            c.execute("INSERT INTO kms_meta(k,v) VALUES(?,?)", (self.META_SALT, salt))
-            c.execute("INSERT INTO kms_meta(k,v) VALUES(?,?)", (self.META_WRAPPED_ROOT, wrapped))
-            c.execute("INSERT INTO kms_meta(k,v) VALUES(?,?)", (self.META_ROOT_CHECK, check))
+            c.execute(
+                "INSERT INTO kms_meta(k,v) VALUES(?,?)",
+                (self.META_CUSTODY, envelope.to_bytes()),
+            )
         self._root_kek = root_kek
 
-    def unlock(self, passphrase: str) -> None:
+    def unlock(self, passphrase: Optional[str] = None) -> None:
         if not self.is_initialized():
             raise RuntimeError("KMS not initialized")
-        c = self.db.conn()
-        salt = c.execute("SELECT v FROM kms_meta WHERE k=?", (self.META_SALT,)).fetchone()["v"]
-        wrapped = c.execute("SELECT v FROM kms_meta WHERE k=?", (self.META_WRAPPED_ROOT,)).fetchone()["v"]
-        check = c.execute("SELECT v FROM kms_meta WHERE k=?", (self.META_ROOT_CHECK,)).fetchone()["v"]
+        custodian = self._resolve_custodian(passphrase)
+        envelope = self._load_envelope(custodian)
+        self._root_kek = custodian.unwrap(envelope)
 
-        wrapping_key = derive_from_passphrase(passphrase, bytes(salt))
-        try:
-            verified = AEAD.decrypt(wrapping_key, bytes(check), aad=b"pqkms/root-kek-check/v1")
-            if verified != b"pqkms-check":
-                raise ValueError("passphrase verification failed")
-        except Exception as e:
-            raise ValueError("invalid passphrase") from e
-        self._root_kek = AEAD.decrypt(wrapping_key, bytes(wrapped), aad=b"pqkms/root-kek/v1")
+    def _load_envelope(self, custodian: RootKeyCustodian) -> CustodyEnvelope:
+        c = self.db.conn()
+        row = c.execute("SELECT v FROM kms_meta WHERE k=?", (self.META_CUSTODY,)).fetchone()
+        if row is not None:
+            return CustodyEnvelope.from_bytes(bytes(row["v"]))
+
+        # Legacy fallback: synthesize an envelope from the pre-custodian rows so a
+        # passphrase custodian unwraps an old database with no migration step. The
+        # legacy AAD and Argon2 params match PassphraseCustodian's defaults exactly.
+        salt = c.execute("SELECT v FROM kms_meta WHERE k=?", (self.META_SALT,)).fetchone()
+        wrapped = c.execute("SELECT v FROM kms_meta WHERE k=?", (self.META_WRAPPED_ROOT,)).fetchone()
+        if salt is None or wrapped is None:
+            raise RuntimeError("KMS not initialized")
+        if custodian.backend_id != "passphrase":
+            raise RuntimeError(
+                "this database uses legacy passphrase custody; cannot unlock with "
+                f"backend {custodian.backend_id!r}"
+            )
+        return CustodyEnvelope(
+            backend_id="passphrase",
+            wrapped_root_kek=bytes(wrapped["v"]),
+            metadata={
+                "salt_b64": base64.b64encode(bytes(salt["v"])).decode(),
+                "argon2": DEFAULT_ARGON2_PARAMS,
+            },
+        )
 
     def is_unlocked(self) -> bool:
         return self._root_kek is not None
@@ -251,6 +289,10 @@ class KeyStore:
         if not mk or mk.key_type != "aead":
             raise ValueError("key not found or not an AEAD key")
         suite, secret, _ = self._load_version(key_id, mk.current_version)
+        # Reserve one slot in this key-version's AES-GCM nonce budget *before*
+        # encrypting. Fails closed (NonceBudgetExceeded) at the hard cap so we
+        # never approach the random-96-bit-nonce birthday bound.
+        self._nonce_policy.reserve(self.db, key_id, mk.current_version)
         blob = AEAD.encrypt(secret, plaintext, aad)
         # Tag with key_id@version and suite so decrypt can route correctly
         header = struct.pack("!BI", int(suite), mk.current_version)

@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS key_versions (
     public_material BLOB,              -- public key for asymmetric keys, NULL otherwise
     created_at TEXT NOT NULL,
     state TEXT NOT NULL DEFAULT 'active', -- 'active', 'rotated', 'revoked'
+    usage_count INTEGER NOT NULL DEFAULT 0, -- AES-GCM nonce budget counter (see app/policy.py)
     UNIQUE(key_id, version),
     FOREIGN KEY(key_id) REFERENCES managed_keys(id) ON DELETE CASCADE
 );
@@ -51,7 +52,8 @@ CREATE TABLE IF NOT EXISTS api_tokens (
     name TEXT NOT NULL,
     scopes TEXT NOT NULL,             -- csv of scopes
     created_at TEXT NOT NULL,
-    revoked INTEGER NOT NULL DEFAULT 0
+    revoked INTEGER NOT NULL DEFAULT 0,
+    expires_at TEXT                   -- ISO8601 UTC; NULL = non-expiring
 );
 
 CREATE INDEX IF NOT EXISTS idx_key_versions_key_id ON key_versions(key_id);
@@ -67,6 +69,21 @@ class Database:
         # initialize
         with self._connect() as c:
             c.executescript(SCHEMA)
+            self._migrate(c)
+
+    @staticmethod
+    def _has_column(c: sqlite3.Connection, table: str, column: str) -> bool:
+        cols = [r["name"] for r in c.execute(f"PRAGMA table_info({table})").fetchall()]
+        return column in cols
+
+    def _migrate(self, c: sqlite3.Connection) -> None:
+        """Additive, idempotent migrations for databases created by older builds.
+        CREATE TABLE IF NOT EXISTS never alters an existing table, so columns
+        introduced after first deploy are added here."""
+        if not self._has_column(c, "key_versions", "usage_count"):
+            c.execute("ALTER TABLE key_versions ADD COLUMN usage_count INTEGER NOT NULL DEFAULT 0")
+        if not self._has_column(c, "api_tokens", "expires_at"):
+            c.execute("ALTER TABLE api_tokens ADD COLUMN expires_at TEXT")
 
     def _connect(self) -> sqlite3.Connection:
         conn = getattr(self._local, "conn", None)

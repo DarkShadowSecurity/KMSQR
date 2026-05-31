@@ -14,6 +14,7 @@ import sys
 import base64
 import logging
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -30,8 +31,10 @@ from slowapi.util import get_remote_address
 from .storage.db import Database
 from .storage.keystore import KeyStore
 from .storage.audit import AuditLog
+from .custody import make_custodian
 from .api.auth import TokenAuth, SCOPES_ADMIN
 from .api.routes import build_router
+from .crypto.kem import HybridKEM
 from .crypto.signatures import HybridSigner
 from .crypto.suites import Suite, SUITE_NAMES
 from .crypto.aead import AEAD
@@ -126,34 +129,97 @@ def _load_or_create_audit_signing_key(ks: KeyStore) -> tuple[bytes, bytes, Suite
 def _validate_passphrase(passphrase: str, min_len: int) -> None:
     if len(passphrase) < min_len:
         log.error(
-            "PQKMS_PASSPHRASE is shorter than the minimum required length (%d). "
+            "Operator passphrase is shorter than the minimum required length (%d). "
             "Set a longer passphrase or override PQKMS_MIN_PASSPHRASE_LEN.",
             min_len,
         )
         sys.exit(1)
 
 
+def _load_passphrase() -> str:
+    """
+    Resolve the operator passphrase. A mounted secret file
+    (PQKMS_PASSPHRASE_FILE) takes precedence over the PQKMS_PASSPHRASE env var,
+    because env vars leak via `docker inspect` and `/proc/<pid>/environ`. The
+    file path is the recommended production posture (Docker/K8s secrets).
+
+    A single trailing newline is stripped (secret tooling and `echo` append one);
+    any other whitespace is preserved as part of the passphrase. Fails closed.
+    """
+    pf = os.environ.get("PQKMS_PASSPHRASE_FILE")
+    if pf:
+        try:
+            data = Path(pf).read_text(encoding="utf-8")
+        except OSError as e:
+            log.error("PQKMS_PASSPHRASE_FILE (%s) could not be read: %s", pf, e)
+            sys.exit(1)
+        passphrase = data[:-1] if data.endswith("\n") else data
+        passphrase = passphrase[:-1] if passphrase.endswith("\r") else passphrase
+        if not passphrase:
+            log.error("PQKMS_PASSPHRASE_FILE (%s) is empty", pf)
+            sys.exit(1)
+        return passphrase
+
+    passphrase = os.environ.get("PQKMS_PASSPHRASE")
+    if not passphrase:
+        log.error("PQKMS_PASSPHRASE or PQKMS_PASSPHRASE_FILE environment variable is required")
+        sys.exit(1)
+    return passphrase
+
+
+def _truthy(val: "str | None", default: bool) -> bool:
+    if val is None:
+        return default
+    return val.strip().lower() not in ("0", "false", "no", "off", "")
+
+
+def _enforce_pq_requirement() -> None:
+    """
+    A post-quantum KMS must not silently degrade to classical-only crypto.
+    With PQKMS_REQUIRE_PQ enabled (the default), refuse to start if liboqs is
+    unavailable. Operators who knowingly want classical-only (e.g. a Windows
+    dev box without liboqs) must opt out explicitly with PQKMS_REQUIRE_PQ=0.
+    """
+    require_pq = _truthy(os.environ.get("PQKMS_REQUIRE_PQ"), default=True)
+    pq_ok = HybridKEM.is_hybrid_available() and HybridSigner.is_hybrid_available()
+    if require_pq and not pq_ok:
+        log.error(
+            "PQKMS_REQUIRE_PQ is enabled but liboqs (post-quantum primitives) is "
+            "unavailable. The KMS would fall back to CLASSICAL-ONLY crypto, which "
+            "defeats its purpose. Refusing to start. Install liboqs (see "
+            "deploy/Dockerfile) or set PQKMS_REQUIRE_PQ=0 to allow classical-only."
+        )
+        sys.exit(1)
+    if not pq_ok:
+        log.warning(
+            "liboqs unavailable — running in CLASSICAL-ONLY mode "
+            "(PQKMS_REQUIRE_PQ explicitly disabled). New material is tagged with "
+            "CLASSIC_* suites and is NOT post-quantum protected."
+        )
+
+
 def create_app() -> FastAPI:
+    # Refuse to start as a classical-only "post-quantum" KMS unless explicitly allowed.
+    _enforce_pq_requirement()
+
     data_dir = Path(os.environ.get("PQKMS_DATA_DIR", "/var/lib/pqkms"))
     data_dir.mkdir(parents=True, exist_ok=True)
     db_path = str(data_dir / "pqkms.sqlite")
 
-    passphrase = os.environ.get("PQKMS_PASSPHRASE")
-    if not passphrase:
-        log.error("PQKMS_PASSPHRASE environment variable is required")
-        sys.exit(1)
+    passphrase = _load_passphrase()
     min_len = int(os.environ.get("PQKMS_MIN_PASSPHRASE_LEN", DEFAULT_MIN_PASSPHRASE_LEN))
     _validate_passphrase(passphrase, min_len)
 
     db = Database(db_path)
-    ks = KeyStore(db)
+    custodian = make_custodian(passphrase)
+    ks = KeyStore(db, custodian)
 
     if not ks.is_initialized():
-        log.info("bootstrapping new KMS at %s", db_path)
-        ks.initialize(passphrase)
+        log.info("bootstrapping new KMS at %s (custody backend: %s)", db_path, custodian.backend_id)
+        ks.initialize()
     else:
-        log.info("unlocking existing KMS at %s", db_path)
-        ks.unlock(passphrase)
+        log.info("unlocking existing KMS at %s (custody backend: %s)", db_path, custodian.backend_id)
+        ks.unlock()
 
     audit_priv, audit_pub, audit_suite = _load_or_create_audit_signing_key(ks)
     audit = AuditLog(db, (audit_priv, audit_pub, audit_suite))
@@ -178,10 +244,24 @@ def create_app() -> FastAPI:
 
     limiter = Limiter(key_func=get_remote_address, default_limits=["120/minute"])
 
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        # Force a WAL checkpoint at startup and shutdown so committed writes are
+        # flushed to the main db file and not stranded in the WAL across an
+        # unclean restart. (Replaces the deprecated @app.on_event hooks.)
+        db.checkpoint()
+        log.info("SQLite WAL checkpoint completed on startup")
+        try:
+            yield
+        finally:
+            db.checkpoint()
+            log.info("SQLite WAL checkpoint completed on shutdown")
+
     app = FastAPI(
         title="PQ-KMS",
         description="Post-Quantum Key Management System",
         version="1.0.0",
+        lifespan=lifespan,
     )
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
@@ -210,16 +290,6 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(build_router(ks, audit, auth, limiter))
-
-    @app.on_event("startup")
-    async def _checkpoint_on_start():
-        db.checkpoint()
-        log.info("SQLite WAL checkpoint completed on startup")
-
-    @app.on_event("shutdown")
-    async def _checkpoint_on_shutdown():
-        db.checkpoint()
-        log.info("SQLite WAL checkpoint completed on shutdown")
 
     # Admin UI
     ui_dir = Path(__file__).parent / "ui"

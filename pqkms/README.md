@@ -84,8 +84,24 @@ defenses enabled out of the box:
 - **Generic error responses**: internal exception details never leak to
   callers; failures are logged with a request id.
 - **Mandatory passphrase** with a configurable minimum length
-  (`PQKMS_MIN_PASSPHRASE_LEN`, default 16).
-- **Pinned liboqs** to a release tag; `apt-get upgrade` runs at image build.
+  (`PQKMS_MIN_PASSPHRASE_LEN`, default 16). The passphrase may be supplied via a
+  mounted secret file (`PQKMS_PASSPHRASE_FILE`, which takes precedence over the
+  `PQKMS_PASSPHRASE` env var) so it never appears in `docker inspect` / `/proc`.
+- **Post-quantum required by default**: with `PQKMS_REQUIRE_PQ` enabled (the
+  default), the server refuses to start if liboqs is unavailable rather than
+  silently degrading to classical-only crypto. Set `PQKMS_REQUIRE_PQ=0` to allow
+  classical-only operation explicitly (e.g. a dev box without liboqs).
+- **Pluggable Root-KEK custody** (`PQKMS_CUSTODY_BACKEND`, default `passphrase`):
+  the Root KEK is sealed in a self-describing custody envelope. Cloud-KMS and
+  PKCS#11/HSM backends slot in behind the same interface.
+- **Enforced AEAD nonce budget**: each key version counts encryptions and
+  *refuses* further use (HTTP 409) as it approaches the AES-256-GCM random-nonce
+  birthday bound, so the 2³² limit can no longer be exceeded by accident. Rotate
+  the key to get a fresh budget.
+- **Optional API-token expiry**: pass `ttl_seconds` when creating a token; expired
+  tokens are rejected. Existing tokens remain non-expiring.
+- **Pinned liboqs** to a release tag, plus a **digest-pinned base image**;
+  `apt-get upgrade` runs at image build.
 
 Before trusting it with real secrets, also:
 
@@ -100,17 +116,24 @@ Before trusting it with real secrets, also:
   alongside the secret.
 - **Rotate AEAD keys** before approximately 2³² messages per key version.
   AES-256-GCM with random 96-bit nonces has a birthday-bound collision risk
-  beyond that point. There is no automatic enforcement; track per-key usage
-  externally or call `POST /keys/{id}/rotate` on a schedule.
+  beyond that point. This is now **enforced**: the KMS counts encryptions per key
+  version, warns at a soft threshold (~2³⁰), and refuses further encryption at the
+  hard bound. You can still rotate proactively via `POST /keys/{id}/rotate`.
 
 ### Tunables
 
 | Env var                       | Default     | Purpose                                  |
 |-------------------------------|-------------|------------------------------------------|
-| `PQKMS_PASSPHRASE`            | (required)  | Operator passphrase for the Root KEK.    |
+| `PQKMS_PASSPHRASE`            | (required\*)| Operator passphrase for the Root KEK.    |
+| `PQKMS_PASSPHRASE_FILE`       | (unset)     | Path to a secret file holding the passphrase; takes precedence over `PQKMS_PASSPHRASE`. |
 | `PQKMS_MIN_PASSPHRASE_LEN`    | `16`        | Reject shorter passphrases at startup.   |
+| `PQKMS_REQUIRE_PQ`           | `1`         | Refuse to start without liboqs (post-quantum). Set `0` to allow classical-only. |
+| `PQKMS_CUSTODY_BACKEND`      | `passphrase`| Root-KEK custody backend (cloud-KMS / PKCS#11 reserved). |
 | `PQKMS_MAX_BODY_BYTES`        | `16777216`  | Request body size cap (16 MiB).          |
 | `PQKMS_DATA_DIR`              | `/var/lib/pqkms` | SQLite + key-material location.     |
+
+\* Required for the `passphrase` custody backend; supply it via `PQKMS_PASSPHRASE`
+or `PQKMS_PASSPHRASE_FILE`.
 
 ## License
 
