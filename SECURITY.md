@@ -24,9 +24,8 @@ Please report privately using **GitHub Private Vulnerability Reporting**:
 3. Provide a description, affected version/commit, reproduction steps, and
    (if known) impact and a suggested fix.
 
-If you cannot use the GitHub workflow, email **security@darkshadowsec.example**
-(replace with your real contact) with the same details. Encrypt sensitive
-reports if possible.
+If you cannot use the GitHub workflow, email **kip@darkshadowsec.com**
+with the same details. Encrypt sensitive reports if possible.
 
 ### What to expect
 
