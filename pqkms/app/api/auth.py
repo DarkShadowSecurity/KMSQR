@@ -1,5 +1,5 @@
-# Copyright (c) 2026 DarkShadowSec LLC. All Rights Reserved.
-# Proprietary and confidential. See LICENSE for terms.
+# Copyright (c) 2026 DarkShadowSec LLC.
+# Licensed under the MIT License. See LICENSE for terms. Provided "as is", without warranty.
 """
 Token authentication. Tokens are stored as SHA-384 hashes; the raw token is
 only returned once at creation time. Scopes control what each token can do.

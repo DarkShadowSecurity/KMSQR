@@ -2,16 +2,16 @@
 
 ## PQ-KMS
 
-PQ-KMS itself is **proprietary software, copyright (c) 2026 DarkShadowSec
-LLC, all rights reserved.** See the `LICENSE` file in this directory for
-the governing terms. No license to use, copy, modify, or distribute the
-original code in this repository is granted by this NOTICES file.
+PQ-KMS itself is free and open-source software, **copyright (c) 2026
+DarkShadowSec LLC, released under the MIT License.** See the `LICENSE` file in
+this directory for the governing terms. The software is provided "as is",
+without warranty of any kind.
 
 ## Third-Party Components
 
 PQ-KMS depends on the following third-party components. Each remains
 governed by its own license, **independent of and unaffected by** the
-proprietary license that covers the original PQ-KMS code. Verbatim
+MIT license that covers the original PQ-KMS code. Verbatim
 license texts are available at the upstream URLs cited below; for
 redistribution that triggers notice obligations (e.g. binary distribution
 of a container image), include the upstream LICENSE / NOTICE files.

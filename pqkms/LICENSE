@@ -1,118 +1,21 @@
-PQ-KMS — Proprietary Software License
-=====================================
+MIT License
 
-Copyright (c) 2026 DarkShadowSec LLC. All Rights Reserved.
+Copyright (c) 2026 DarkShadowSec LLC
 
-This software, including all source code, documentation, configuration,
-build scripts, and any associated artifacts (collectively, the "Software"),
-is the confidential and proprietary property of DarkShadowSec LLC ("Owner").
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-NO LICENSE GRANTED
-------------------
-No right or license, express or implied, is granted to any person or entity
-under this notice. Without the prior written permission of the Owner, no
-person may:
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-    (a) use, execute, install, or run the Software for any purpose;
-    (b) copy, reproduce, or transmit the Software in whole or in part;
-    (c) modify, adapt, translate, or create derivative works based on the
-        Software;
-    (d) distribute, sublicense, lease, rent, sell, or otherwise transfer
-        the Software or any rights therein;
-    (e) reverse engineer, disassemble, decompile, or otherwise attempt to
-        derive the source code or underlying algorithms from the Software,
-        except to the extent such activity is expressly permitted by
-        applicable law notwithstanding this restriction;
-    (f) remove, obscure, or alter any proprietary notices, labels, or
-        marks on or within the Software; or
-    (g) publicly disclose performance, benchmark, security, or evaluation
-        results regarding the Software.
-
-CONFIDENTIALITY
----------------
-The Software and any related materials are the trade secrets and
-confidential information of the Owner. Any person who comes into
-possession of the Software shall hold it in strict confidence and use
-reasonable measures, no less rigorous than those used to protect their
-own most sensitive confidential information, to prevent unauthorized
-disclosure or use.
-
-THIRD-PARTY COMPONENTS
-----------------------
-The Software incorporates or depends on certain third-party components
-that are licensed under their own terms. Those components remain governed
-by their respective licenses, which are reproduced or referenced in the
-file NOTICES.md included with this distribution. Nothing in this License
-modifies, supersedes, or grants any rights with respect to those
-third-party components.
-
-NO WARRANTY
------------
-THE SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE," WITHOUT WARRANTY
-OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
-WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE,
-TITLE, AND NON-INFRINGEMENT. THE OWNER DOES NOT WARRANT THAT THE
-SOFTWARE WILL MEET ANY REQUIREMENTS, OPERATE WITHOUT INTERRUPTION OR
-ERROR, OR BE FREE OF SECURITY VULNERABILITIES.
-
-LIMITATION OF LIABILITY
------------------------
-TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL
-THE OWNER BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
-EXEMPLARY, PUNITIVE, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-LIMITED TO, LOSS OF PROFITS, LOSS OF DATA, LOSS OF GOODWILL, BUSINESS
-INTERRUPTION, OR PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES) ARISING
-OUT OF OR RELATING TO THE SOFTWARE OR THIS LICENSE, REGARDLESS OF THE
-THEORY OF LIABILITY (CONTRACT, TORT, STRICT LIABILITY, OR OTHERWISE)
-AND EVEN IF THE OWNER HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH
-DAMAGES.
-
-EXPORT, CRYPTOGRAPHY, AND COMPLIANCE
-------------------------------------
-The Software contains, employs, or interfaces with cryptographic
-functionality and may be subject to export controls and sanctions laws
-of the United States and other jurisdictions. Any party who comes into
-authorized possession of the Software is solely responsible for
-compliance with all applicable laws and regulations, including but not
-limited to the U.S. Export Administration Regulations (EAR) and the
-International Traffic in Arms Regulations (ITAR).
-
-ENFORCEMENT AND REMEDIES
-------------------------
-The Owner reserves all rights not expressly granted. Any unauthorized
-use, reproduction, distribution, or disclosure of the Software is a
-material breach of this License and may constitute a violation of
-applicable copyright, trade secret, and other intellectual property
-laws. The Owner shall be entitled to seek all available remedies,
-including injunctive relief and recovery of damages, costs, and
-reasonable attorneys' fees.
-
-GOVERNING LAW AND VENUE
------------------------
-This License shall be governed by, and construed in accordance with,
-the laws of the State of Colorado, United States of America, without
-regard to its conflict-of-laws principles. The exclusive jurisdiction
-and venue for any dispute, claim, or proceeding arising out of or
-relating to this License or the Software shall lie in the state and
-federal courts located in the State of Colorado, and the parties
-hereby consent to the personal jurisdiction of such courts.
-
-If any provision of this License is held to be unenforceable or
-invalid under applicable law, that provision shall be enforced to the
-maximum extent permitted, and the remaining provisions shall remain
-in full force and effect.
-
-LICENSING INQUIRIES
--------------------
-For commercial licensing, evaluation access, or any other authorized
-use, contact:
-
-    DarkShadowSec LLC
-    kip@darkshadowsec.com
-
-Receipt or possession of the Software does not convey or imply any
-license or right to use it. If you have received the Software in error
-or without authorization, notify the Owner immediately and destroy all
-copies in your possession or control.
-
-End of License.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
