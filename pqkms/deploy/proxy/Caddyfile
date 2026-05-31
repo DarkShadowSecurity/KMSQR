@@ -1,0 +1,42 @@
+# PQC-hybrid TLS reverse proxy for PQ-KMS (DEFAULT transport posture).
+#
+# Caddy 2.9+ (built on Go 1.24+) negotiates the X25519MLKEM768 hybrid key
+# exchange by default, so a capable client gets post-quantum-protected TLS with
+# no extra configuration. Verify after start with:
+#   openssl s_client -connect localhost:8443 -groups X25519MLKEM768   # OpenSSL 3.5+
+#
+# This is the documented default because the app's slim base image ships an
+# OpenSSL too old for in-process PQC-hybrid TLS; native TLS/mTLS in the app
+# (PQKMS_TLS_*) remains available for classical transport.
+
+{
+	# Demo uses Caddy's internal CA. For production, replace `tls internal`
+	# below with real certs (`tls /path/cert.pem /path/key.pem`) or ACME.
+	auto_https disable_redirects
+}
+
+:8443 {
+	tls internal {
+		# --- Optional mutual TLS -------------------------------------------
+		# Mount a client CA and uncomment to require + verify client certs:
+		# client_auth {
+		#     mode require_and_verify
+		#     trusted_ca_cert_file /etc/caddy/client-ca.pem
+		# }
+		# -------------------------------------------------------------------
+	}
+
+	# `handle` blocks are evaluated in order and are mutually exclusive, so the
+	# internal /metrics endpoint can never be reached through the public proxy.
+	handle /metrics* {
+		respond 404
+	}
+
+	# Everything else is load-balanced across the app replicas. `dynamic a`
+	# re-resolves the compose service name so all replica IPs are used.
+	handle {
+		reverse_proxy {
+			dynamic a pqkms 8080
+		}
+	}
+}

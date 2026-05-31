@@ -1,0 +1,14 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Scrape the app replicas over the internal compose network. Docker resolves
+  # the `pqkms` service name to all replica IPs; dns_sd_configs discovers them.
+  - job_name: pqkms
+    metrics_path: /metrics
+    dns_sd_configs:
+      - names: ["pqkms"]
+        type: A
+        port: 8080
+        refresh_interval: 15s

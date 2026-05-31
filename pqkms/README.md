@@ -34,6 +34,35 @@ logs. Copy it — you'll paste it into the UI's login gate.
 docker compose -f deploy/docker-compose.yml logs pqkms | grep "BOOTSTRAP ADMIN"
 ```
 
+## High-availability deployment
+
+For a multi-replica, production-shaped stack (3 stateless app replicas behind a
+PQC-hybrid TLS reverse proxy, shared PostgreSQL + Redis, Prometheus + Grafana):
+
+```bash
+# 1. create the mounted secrets (see deploy/compose-secrets/README.md)
+mkdir -p deploy/compose-secrets
+printf '%s' 'a-strong-operator-passphrase-32+chars' > deploy/compose-secrets/pqkms_passphrase
+printf '%s' 'a-strong-postgres-password'            > deploy/compose-secrets/postgres_password
+printf '%s' 'a-strong-grafana-password'             > deploy/compose-secrets/grafana_password
+
+# 2. bring up the stack
+docker compose -f deploy/docker-compose.ha.yml up --build
+
+# 3. grab the bootstrap admin token (printed once by the init service)
+docker compose -f deploy/docker-compose.ha.yml logs pqkms-init | grep -A1 "BOOTSTRAP ADMIN"
+```
+
+API/UI are served over PQC-hybrid TLS at `https://localhost:8443/`. A one-shot
+`pqkms-init` service creates the Root KEK, audit signing key, and bootstrap
+token exactly once before the replicas start. The reverse proxy (Caddy by
+default; an nginx + OpenSSL 3.5 sample is in `deploy/proxy/`) negotiates
+`X25519MLKEM768` and never exposes `/metrics`. Prometheus scrapes the replicas
+on the internal network; Grafana is on `:3000`.
+
+For proxy-less or internal deployments you can terminate TLS in the app itself
+with `PQKMS_TLS_CERT`/`PQKMS_TLS_KEY` (and `PQKMS_TLS_CLIENT_CA` for mTLS).
+
 ## Running tests
 
 ```bash
@@ -152,6 +181,8 @@ Before trusting it with real secrets, also:
 | `PQKMS_REDIS_URL`            | (in-memory) | Shared rate-limit storage across replicas, e.g. `redis://redis:6379/0`. Fails open (local fallback) if Redis is unreachable. |
 | `PQKMS_LOG_FORMAT`           | `text`      | `json` emits one structured JSON log object per line (with `request_id`) for log shippers. |
 | `PQKMS_LOG_LEVEL`            | `INFO`      | Root log level.                          |
+| `PQKMS_TLS_CERT` / `PQKMS_TLS_KEY` | (unset) | Enable native in-process TLS (uvicorn). Otherwise terminate TLS at the proxy. |
+| `PQKMS_TLS_CLIENT_CA`        | (unset)     | With native TLS, require + verify client certs (mutual TLS). |
 
 \* Required for the `passphrase` custody backend; supply it via `PQKMS_PASSPHRASE`
 or `PQKMS_PASSPHRASE_FILE`.

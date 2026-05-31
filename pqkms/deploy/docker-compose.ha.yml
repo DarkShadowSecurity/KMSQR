@@ -1,0 +1,153 @@
+# High-availability topology for PQ-KMS.
+#
+#   pqkms-init (one-shot bootstrap) -> 3 stateless app replicas behind a
+#   PQC-hybrid TLS reverse proxy, backed by shared PostgreSQL + Redis, with
+#   Prometheus + Grafana for observability.
+#
+# Quick start:
+#   1. printf 'a-strong-operator-passphrase-32+chars' > deploy/compose-secrets/pqkms_passphrase
+#      printf 'a-strong-postgres-password'            > deploy/compose-secrets/postgres_password
+#      printf 'a-strong-grafana-password'             > deploy/compose-secrets/grafana_password
+#   2. docker compose -f deploy/docker-compose.ha.yml up --build
+#   3. Grab the bootstrap admin token from the init service:
+#      docker compose -f deploy/docker-compose.ha.yml logs pqkms-init | grep -A1 "BOOTSTRAP ADMIN"
+#   4. API/UI via the proxy at https://localhost:8443/  (/metrics is NOT exposed there)
+#
+# Every replica unlocks the Root KEK independently at boot from the SAME mounted
+# secret file — never pass the passphrase as a plain environment variable.
+
+x-pqkms-env: &pqkms-env
+  PQKMS_PASSPHRASE_FILE: /run/secrets/pqkms_passphrase
+  PQKMS_DB_URL: "postgresql+psycopg://pqkms@postgres:5432/pqkms"
+  PGPASSWORD_FILE: /run/secrets/postgres_password   # consumed by the entrypoint below
+  PQKMS_REDIS_URL: "redis://redis:6379/0"
+  PQKMS_AUDIT_LOG_FILE: /var/lib/pqkms/audit/audit.jsonl
+  PQKMS_LOG_FORMAT: json
+  PQKMS_REQUIRE_PQ: "1"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pqkms
+      POSTGRES_DB: pqkms
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password]
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pqkms -d pqkms"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # One-shot: create the Root KEK / audit key and mint the bootstrap token once,
+  # in a single known place, before the replicas come up.
+  pqkms-init:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: pqkms:latest
+    environment:
+      <<: *pqkms-env
+    # PG password must reach psycopg; export it from the secret then run init.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - 'export PGPASSWORD="$(cat /run/secrets/postgres_password)"; exec python -m app.cli.init'
+    secrets: [pqkms_passphrase, postgres_password]
+    volumes:
+      - audit-log:/var/lib/pqkms/audit
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    restart: "no"
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+
+  pqkms:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: pqkms:latest
+    environment:
+      <<: *pqkms-env
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - 'export PGPASSWORD="$(cat /run/secrets/postgres_password)"; exec /usr/bin/tini -- python -m app.server'
+    secrets: [pqkms_passphrase, postgres_password]
+    volumes:
+      - audit-log:/var/lib/pqkms/audit
+    deploy:
+      replicas: 3
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      pqkms-init: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2).status==200 else 1)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+
+  proxy:
+    image: caddy:2.9-alpine
+    depends_on: [pqkms]
+    ports:
+      - "8443:8443"   # public, PQC-hybrid TLS
+    volumes:
+      - ./proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    # Internal only — scrapes pqkms:8080/metrics over the compose network.
+    expose: ["9090"]
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    depends_on: [prometheus]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_password
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    secrets: [grafana_password]
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+secrets:
+  pqkms_passphrase:
+    file: ./compose-secrets/pqkms_passphrase
+  postgres_password:
+    file: ./compose-secrets/postgres_password
+  grafana_password:
+    file: ./compose-secrets/grafana_password
+
+volumes:
+  pg-data:
+  audit-log:
+  caddy-data:
+  caddy-config:
+  grafana-data:

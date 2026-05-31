@@ -1,0 +1,46 @@
+# Sample nginx reverse proxy with PQC-hybrid TLS — ALTERNATIVE to the Caddyfile.
+#
+# Requires nginx built against OpenSSL 3.5+ (the first release with the
+# X25519MLKEM768 hybrid group). Confirm your build:
+#   nginx -V 2>&1 | tr ' ' '\n' | grep -i openssl
+#   openssl version            # must report 3.5.0 or newer
+#
+# Then run nginx with this config instead of the `proxy` (Caddy) service.
+
+upstream pqkms_replicas {
+    # List the app replicas (or use an nginx resolver for dynamic discovery).
+    server pqkms:8080 resolve;   # 'resolve' needs the 'resolver' directive + nginx-plus / njs
+    # Static alternative:
+    # server pqkms-1:8080;
+    # server pqkms-2:8080;
+    # server pqkms-3:8080;
+}
+
+server {
+    listen 8443 ssl;
+    http2 on;
+
+    ssl_certificate     /etc/nginx/certs/server.crt;
+    ssl_certificate_key /etc/nginx/certs/server.key;
+    ssl_protocols       TLSv1.3;
+
+    # Post-quantum hybrid key exchange (OpenSSL 3.5+). Offer the hybrid group
+    # first, then classical fallback.
+    ssl_ecdh_curve      X25519MLKEM768:X25519:secp256r1;
+
+    # --- Optional mutual TLS -------------------------------------------------
+    # ssl_client_certificate /etc/nginx/certs/client-ca.crt;
+    # ssl_verify_client on;
+    # -------------------------------------------------------------------------
+
+    # Never expose internal metrics publicly.
+    location = /metrics { return 404; }
+
+    location / {
+        proxy_pass http://pqkms_replicas;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
