@@ -100,6 +100,11 @@ defenses enabled out of the box:
   the key to get a fresh budget.
 - **Optional API-token expiry**: pass `ttl_seconds` when creating a token; expired
   tokens are rejected. Existing tokens remain non-expiring.
+- **Observability**: a `/metrics` Prometheus endpoint (request counts + latency
+  by route template, and a keystore-unlocked gauge), structured JSON logs
+  (`PQKMS_LOG_FORMAT=json`), and an `X-Request-ID` on every response that is
+  echoed in logs and in 500 error bodies for correlation. Scrape `/metrics` from
+  the internal network only — keep it off the public proxy route.
 - **Pinned liboqs** to a release tag, plus a **digest-pinned base image**;
   `apt-get upgrade` runs at image build.
 
@@ -145,6 +150,8 @@ Before trusting it with real secrets, also:
 | `PQKMS_DB_URL`               | (SQLite file) | SQLAlchemy database URL. Set to `postgresql+psycopg://…` for HA / multi-replica. |
 | `PQKMS_AUDIT_LOG_FILE`       | (unset)     | Path to an append-only file; every audit entry is also fsync'd here as JSONL for off-box WORM verification. |
 | `PQKMS_REDIS_URL`            | (in-memory) | Shared rate-limit storage across replicas, e.g. `redis://redis:6379/0`. Fails open (local fallback) if Redis is unreachable. |
+| `PQKMS_LOG_FORMAT`           | `text`      | `json` emits one structured JSON log object per line (with `request_id`) for log shippers. |
+| `PQKMS_LOG_LEVEL`            | `INFO`      | Root log level.                          |
 
 \* Required for the `passphrase` custody backend; supply it via `PQKMS_PASSPHRASE`
 or `PQKMS_PASSPHRASE_FILE`.

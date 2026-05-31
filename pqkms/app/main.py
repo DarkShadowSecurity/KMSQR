@@ -13,7 +13,6 @@ import os
 import sys
 import base64
 import logging
-import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -37,9 +36,16 @@ from .api.auth import TokenAuth, SCOPES_ADMIN
 from .api.routes import build_router
 from .crypto.kem import HybridKEM
 from .crypto.signatures import HybridSigner
+from .obs import (
+    RequestObservabilityMiddleware,
+    configure_logging,
+    metrics_response,
+    request_id_var,
+    set_unlocked,
+)
 
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s :: %(message)s")
+configure_logging()
 log = logging.getLogger("pqkms")
 
 
@@ -258,6 +264,9 @@ def create_app() -> FastAPI:
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=max_body)
     app.add_middleware(SecurityHeadersMiddleware)
+    # Added last → outermost: assigns the request id before anything else runs
+    # and times the whole request.
+    app.add_middleware(RequestObservabilityMiddleware)
 
     # Generic exception handlers so internal exception messages are not reflected
     # to the caller. Each error gets a request id that the operator can correlate
@@ -273,8 +282,10 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(Exception)
     async def unhandled_handler(request: Request, exc: Exception):
-        rid = uuid.uuid4().hex[:12]
-        log.exception("unhandled exception [rid=%s] on %s %s", rid, request.method, request.url.path)
+        # Reuse the per-request id assigned by the observability middleware so the
+        # caller-facing request_id matches the correlated server log line.
+        rid = request_id_var.get()
+        log.exception("unhandled exception on %s %s", request.method, request.url.path)
         return JSONResponse(
             status_code=500,
             content={"detail": "internal error", "request_id": rid},
@@ -299,6 +310,13 @@ def create_app() -> FastAPI:
             "api": "/api/v1",
             "pq_available": HybridSigner.is_hybrid_available(),
         })
+
+    @app.get("/metrics")
+    def metrics():
+        """Prometheus exposition. Scrape from the internal network only — the
+        reverse proxy must not expose this publicly."""
+        set_unlocked(ks.is_unlocked())
+        return metrics_response()
 
     @app.get("/health")
     def health():

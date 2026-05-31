@@ -11,8 +11,10 @@ argon2-cffi==23.1.0
 slowapi==0.1.9
 # SQLAlchemy Core is the storage abstraction (SQLite by default; PostgreSQL via
 # PQKMS_DB_URL for HA). The PostgreSQL driver (psycopg) is an optional extra
-# installed only when targeting Postgres.
+# installed only when targeting Postgres (see requirements-ha.txt).
 SQLAlchemy==2.0.48
+# Prometheus metrics exposition for /metrics.
+prometheus-client==0.21.1
 # liboqs-python: post-quantum primitives. Version must match the C liboqs
 # installed in the container image (see deploy/Dockerfile LIBOQS_REF).
 # If unavailable at runtime, the KMS degrades to classical-only (X25519 +
