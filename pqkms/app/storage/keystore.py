@@ -139,6 +139,20 @@ class KeyStore:
             },
         )
 
+    def rewrap_root_kek(self, new_custodian: RootKeyCustodian) -> None:
+        """
+        Re-seal the EXISTING Root KEK under a new custodian (e.g. after an
+        operator passphrase change). Subordinate key material is untouched — only
+        the custody envelope is replaced — so this is cheap regardless of how many
+        managed keys exist. Requires the store to be unlocked. Writing the new
+        custody envelope also transparently migrates a legacy-format database to
+        the current envelope format.
+        """
+        self._require_unlocked()
+        new_custodian.healthcheck()
+        new_envelope = new_custodian.initialize(self._root_kek)
+        self.repo.set_meta(self.META_CUSTODY, new_envelope.to_bytes())
+
     def is_unlocked(self) -> bool:
         return self._root_kek is not None
 

@@ -91,6 +91,14 @@ class Repository:
                 return False
             raise
 
+    def set_meta(self, k: str, v: bytes) -> None:
+        """Upsert a meta value (update if present, else insert). Used to re-seal
+        the custody envelope during operator passphrase / Root-KEK custody rotation."""
+        with self._engine.begin() as conn:
+            res = conn.execute(update(kms_meta).where(kms_meta.c.k == k).values(v=v))
+            if res.rowcount == 0:
+                conn.execute(insert(kms_meta).values(k=k, v=v))
+
     def meta_exists_any(self, keys: list[str]) -> bool:
         with self._engine.connect() as conn:
             return conn.execute(

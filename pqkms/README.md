@@ -134,6 +134,10 @@ defenses enabled out of the box:
   (`PQKMS_LOG_FORMAT=json`), and an `X-Request-ID` on every response that is
   echoed in logs and in 500 error bodies for correlation. Scrape `/metrics` from
   the internal network only — keep it off the public proxy route.
+- **Operator tooling**: backup/restore-verify (`python -m app.cli.backup
+  {create,verify}`), audit verification (`python -m app.cli.audit verify`), and
+  operator-passphrase rotation that re-seals the Root KEK without re-encrypting
+  subordinate keys (`python -m app.cli.rekey`). See [`deploy/RUNBOOK.md`](deploy/RUNBOOK.md).
 - **Pinned liboqs** to a release tag, plus a **digest-pinned base image**;
   `apt-get upgrade` runs at image build.
 
