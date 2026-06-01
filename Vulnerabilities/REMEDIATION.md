@@ -99,3 +99,119 @@ Both are the build-time `git clone` of the Open Quantum Safe liboqs source
 to `github.com` is required only at build/CI time; the runtime image initiates no
 outbound connections. Same posture as the prior scan above. Optional future
 hardening: pin to an immutable commit SHA or vendor a checksum-verified tarball.
+
+---
+
+# Scan `474d113d` — 2026-06-01 (30 findings: 0 crit / 8 high / 19 med / 3 low)
+
+Report source: `scan-474d113d-bfae-401d-aa35-b790cdd5522e.json`
+Triage date: 2026-06-01
+
+Two findings are genuine deployment-hardening gaps and are **fixed**. The other
+28 are tentative static-analysis matches on operator-controlled configuration,
+loopback test code, or the project's deliberate, secure secret-handling — all
+**false positives**, documented below. None are remotely exploitable.
+
+## 1. MEDIUM — `compose-exposed-port` 8080:8080 in `deploy/docker-compose.yml` — **FIXED**
+
+- The single-node compose published the KMS on `8080:8080`, i.e. `0.0.0.0`. The
+  app serves plain HTTP unless `PQKMS_TLS_*` is set, so it is meant to sit behind
+  a TLS-terminating proxy, not be exposed on every host interface.
+- Remediation: changed the mapping to `127.0.0.1:8080:8080` (loopback only).
+  Off-box access is now an explicit choice — front it with a reverse proxy (see
+  the proxied `docker-compose.ha.yml` topology) or enable the native TLS listener.
+
+## 2. LOW — `compose-no-resource-limits` in `deploy/docker-compose.yml` — **FIXED**
+
+- No memory/CPU bound; a runaway or hostile load could exhaust the host.
+- Remediation: added `deploy.resources.limits` (cpus `2.0`, memory `512M`) plus a
+  `128M` reservation. The same block was added to the `pqkms` service in
+  `docker-compose.ha.yml` for parity across the replica set.
+
+## 3. HIGH ×3 + MEDIUM ×2 — secrets / weak-password / ODBC in `docker-compose.ha.yml:67,87` — **FALSE POSITIVES**
+
+Findings: `generic-secret-assignment` (67, 87), `config-weak-password` (67),
+`odbc-connection-string` (67, 87). All five match the single shell fragment:
+
+```yaml
+command:
+  - 'export PGPASSWORD="$(cat /run/secrets/postgres_password)"; exec ...'
+```
+
+- This assigns `PGPASSWORD` from a **command substitution that reads a mounted
+  Docker secret at runtime** — there is no literal credential, no value committed
+  to source. It is the standard, secure way to hand a libpq password to psycopg
+  (libpq has no file-based password env that takes a raw secret path; `PGPASSFILE`
+  requires the `host:port:db:user:password` format).
+- The file's own header (lines 16–17) mandates exactly this posture: "never pass
+  the passphrase as a plain environment variable" — the secret is mounted at
+  `/run/secrets/postgres_password` via Docker `secrets:` and read at boot.
+- The `odbc-connection-string` / `config-weak-password` labels are misfires: there
+  is no ODBC string and no weak/default password — just `PASSWORD="$(cat ...)"`
+  pattern text. **No code change; no credential to rotate.**
+
+## 4. HIGH ×5 — `python.ssrf.variable-url` in `tests/e2e_integration.py:81,108,196,203,220` — **FALSE POSITIVES**
+
+- This is a self-contained end-to-end test that **spawns its own uvicorn server on
+  `127.0.0.1`** and probes it. Every URL is loopback: line 81 is the literal
+  `f"http://127.0.0.1:{PORT}/"` readiness poll; the rest are
+  `urllib.request.urlopen(req)` where `req` targets the constant
+  `BASE = "http://127.0.0.1:{PORT}/api/v1"`.
+- No request-controlled host, no scheme/host attacker influence, no cloud-metadata
+  reachability. Test-only code, never shipped in the runtime image. **No change.**
+
+## 5. MEDIUM ×12 — `python.path-traversal.variable-path` — **FALSE POSITIVES**
+
+`open()`/`Path()` called with a non-constant path. In every case the path is
+**operator-controlled** (a deployment env var or a local CLI argument) — never a
+value taken from an HTTP request. The KMS HTTP API exposes no endpoint that maps a
+caller-supplied string to a filesystem path; key material is addressed by id, not
+path. Enumerated:
+
+| File:line | Source of the path | Why it is not attacker-controlled |
+| --- | --- | --- |
+| `app/main.py:130` | `PQKMS_PASSPHRASE_FILE` env | operator-set secret mount path |
+| `app/main.py:183` | `PQKMS_DATA_DIR` env (default `/var/lib/pqkms`) | operator-set data dir |
+| `app/main.py:297` | `Path(__file__).parent / "ui"` | a compile-time constant, no input at all |
+| `app/storage/audit_sink.py:62` | `PQKMS_AUDIT_LOG_FILE` env | operator-set audit sink path |
+| `app/storage/engine.py:28` | `PQKMS_DATA_DIR` env | operator-set data dir |
+| `app/custody/factory.py:29` | `PQKMS_SHAMIR_SHARE_FILES` env | operator-set share paths |
+| `app/cli/audit.py:36,45` | `PQKMS_PASSPHRASE_FILE` env / audit-log path | local CLI run by the operator |
+| `app/cli/backup.py:46,89,101` | `out_dir` CLI arg / `PQKMS_PASSPHRASE_FILE` | operator chooses the backup dir |
+| `app/cli/init.py:34` | `PQKMS_PASSPHRASE_FILE` env | operator-set secret mount path |
+| `app/cli/rekey.py:36` | `PQKMS_PASSPHRASE[_FILE]` env | operator-set secret mount path |
+
+These are the binding's intended interface: the operator who sets the env var or
+runs the CLI already has the privileges any path would grant. **No change.**
+
+## 6. LOW ×2 — `dockerfile-unpinned-packages` in `deploy/Dockerfile:22,45` — **JUSTIFIED**
+
+- Line 22 installs the **builder-stage** toolchain (`build-essential cmake
+  ninja-build git ca-certificates libssl-dev`). Multi-stage build: none of these
+  reach the runtime image (only the liboqs `.so` is copied), so they add zero
+  runtime attack surface.
+- Line 45 installs `libssl3 tini` in the runtime stage.
+- Reproducibility for these OS packages comes from the **base image digest pin**
+  (`python:3.12-slim@sha256:090ba…`, Dockerfile lines 12–15), and the project
+  deliberately does **not** `apt-get upgrade` so builds stay reproducible and OS
+  patches arrive via Dependabot digest bumps. Pinning exact Debian point-release
+  versions here would break the build on the next digest bump (the pinned version
+  leaves the mirror index), directly fighting that strategy. Accepted risk,
+  consistent with the documented build philosophy. **No change.**
+
+---
+
+## Scan 474d113d summary
+
+| Finding | Severity | Status |
+| --- | --- | --- |
+| compose-exposed-port — docker-compose.yml | medium | **Fixed (→ 127.0.0.1)** |
+| compose-no-resource-limits — docker-compose.yml | low | **Fixed (limits added)** |
+| secret/weak-pw/odbc — docker-compose.ha.yml:67,87 (×5) | high/med | **FP (runtime secret read)** |
+| ssrf variable-url — e2e_integration.py (×5) | high | **FP (loopback test)** |
+| path-traversal variable-path (×12) | medium | **FP (operator-controlled path)** |
+| dockerfile-unpinned-packages — Dockerfile:22,45 (×2) | low | **Justified (digest-pin strategy)** |
+
+Both actionable deployment-hardening findings are fixed. The remaining 28 are
+tentative analyzer matches on operator configuration, loopback test code, or the
+project's intentional secure secret handling.
