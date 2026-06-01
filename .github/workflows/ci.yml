@@ -21,6 +21,7 @@ jobs:
   unit-classical:
     name: Unit tests (windows, classical-only)
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         # actions/checkout v4.2.2 — pinned by SHA (Dependabot will bump this).
@@ -48,6 +49,7 @@ jobs:
   pq:
     name: Unit + e2e (linux, post-quantum)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       # Must match the liboqs-python minor in requirements.txt (0.15.x).
       LIBOQS_REF: "0.15.0"

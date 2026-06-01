@@ -3,8 +3,11 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
-    image: pqkms:latest
+    # Pinned tag (not :latest) for reproducible deploys.
+    image: pqkms:1.0.0
     container_name: pqkms
+    # Run as the non-root user baked into the image (explicit for clarity).
+    user: pqkms
     restart: unless-stopped
     environment:
       # PQKMS_PASSPHRASE is mandatory — the container fails fast if it's unset.
@@ -29,9 +32,13 @@ services:
       start_period: 15s
     security_opt:
       - no-new-privileges:true
-    read_only: false
     cap_drop:
       - ALL
+    # Read-only root filesystem; only the data volume and an ephemeral /tmp are
+    # writable. Key material lives in the pqkms-data volume.
+    read_only: true
+    tmpfs:
+      - /tmp
     logging:
       driver: json-file
       options:
