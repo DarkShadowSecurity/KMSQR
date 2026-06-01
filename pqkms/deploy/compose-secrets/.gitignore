@@ -1,0 +1,4 @@
+# Never commit real secrets. Keep this folder but ignore its contents.
+*
+!.gitignore
+!README.md

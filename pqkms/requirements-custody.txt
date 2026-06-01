@@ -1,0 +1,12 @@
+# Optional dependencies for non-default Root-KEK custody backends
+# (PQKMS_CUSTODY_BACKEND). Install only the one you use:
+#
+#   pip install boto3              # PQKMS_CUSTODY_BACKEND=awskms
+#   pip install google-cloud-kms   # PQKMS_CUSTODY_BACKEND=gcpkms
+#   pip install python-pkcs11      # PQKMS_CUSTODY_BACKEND=pkcs11
+#
+# The 'shamir' backend is self-contained and needs no extra dependency.
+
+boto3>=1.35,<2
+google-cloud-kms>=3,<4
+python-pkcs11>=0.7,<1

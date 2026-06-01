@@ -11,6 +11,7 @@ from slowapi import Limiter
 
 from ..storage.keystore import KeyStore
 from ..storage.audit import AuditLog
+from ..policy import NonceBudgetExceeded
 from .auth import (
     TokenAuth,
     require_scope,
@@ -77,6 +78,8 @@ class UnwrapReq(BaseModel):
 class CreateTokenReq(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     scopes: list[str] = Field(..., min_length=1, max_length=16)
+    # Optional expiry. Omit for a non-expiring token. Cap at ~10 years.
+    ttl_seconds: Optional[int] = Field(None, ge=1, le=10 * 365 * 24 * 3600)
 
 
 def _safe_call(action: str, fn, *args, **kwargs):
@@ -145,7 +148,7 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, limiter: Limite
         except KeyError:
             raise HTTPException(404, "not found")
         except Exception:
-            log.exception("key.rotate failed for %s", key_id)
+            log.exception("key.rotate failed")  # request correlated via X-Request-ID
             raise HTTPException(500, "internal error")
         audit.append(_actor(scopes), "key.rotate", target=key_id, detail={"new_version": mk.current_version})
         return mk
@@ -156,7 +159,17 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, limiter: Limite
     def encrypt(request: Request, key_id: str, req: EncryptReq, scopes=Depends(require_scope(auth, SCOPES_ENCRYPT))):
         pt = _b64decode(req.plaintext_b64)
         aad = _b64decode_optional(req.aad_b64)
-        out = _safe_call("key.encrypt", ks.encrypt, key_id, pt, aad)
+        try:
+            out = ks.encrypt(key_id, pt, aad)
+        except NonceBudgetExceeded as e:
+            log.warning("key.encrypt refused: %s", e)
+            raise HTTPException(409, "key nonce budget exhausted; rotate the key before encrypting more")
+        except (ValueError, KeyError) as e:
+            log.warning("key.encrypt rejected: %s", e)
+            raise HTTPException(400, "invalid request")
+        except Exception:
+            log.exception("key.encrypt failed unexpectedly")  # request correlated via X-Request-ID
+            raise HTTPException(500, "internal error")
         audit.append(_actor(scopes), "key.encrypt", target=key_id, detail={"bytes": len(pt)})
         return out
 
@@ -170,7 +183,7 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, limiter: Limite
             log.warning("key.decrypt rejected: %s", e)
             raise HTTPException(400, "decrypt failed")
         except Exception:
-            log.exception("key.decrypt failed unexpectedly for %s", key_id)
+            log.exception("key.decrypt failed unexpectedly")  # request correlated via X-Request-ID
             raise HTTPException(500, "internal error")
         audit.append(_actor(scopes), "key.decrypt", target=key_id, detail={"bytes": len(pt)})
         return {"plaintext_b64": base64.b64encode(pt).decode()}
@@ -206,7 +219,7 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, limiter: Limite
             log.warning("key.unwrap rejected: %s", e)
             raise HTTPException(400, "unwrap failed")
         except Exception:
-            log.exception("key.unwrap failed unexpectedly for %s", key_id)
+            log.exception("key.unwrap failed unexpectedly")  # request correlated via X-Request-ID
             raise HTTPException(500, "internal error")
         audit.append(_actor(scopes), "key.unwrap", target=key_id)
         return {"data_key_b64": base64.b64encode(dk).decode()}
@@ -230,11 +243,14 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, limiter: Limite
     @limiter.limit("10/minute")
     def create_token(request: Request, req: CreateTokenReq, scopes=Depends(require_scope(auth, SCOPES_ADMIN))):
         try:
-            tid, raw = auth.create_token(req.name, set(req.scopes))
+            tid, raw = auth.create_token(req.name, set(req.scopes), req.ttl_seconds)
         except ValueError as e:
             log.warning("token.create rejected: %s", e)
             raise HTTPException(400, "invalid scope")
-        audit.append(_actor(scopes), "token.create", target=tid, detail={"scopes": req.scopes, "name": req.name})
+        audit.append(
+            _actor(scopes), "token.create", target=tid,
+            detail={"scopes": req.scopes, "name": req.name, "ttl_seconds": req.ttl_seconds},
+        )
         return {"id": tid, "token": raw, "warning": "this token is only shown once; store it securely"}
 
     @r.get("/tokens")

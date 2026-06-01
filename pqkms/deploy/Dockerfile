@@ -1,14 +1,20 @@
 # PQ-KMS container
 # Builds liboqs from source for post-quantum support, then installs the Python app.
 #
-# LIBOQS_REF is pinned to a release tag for reproducibility and to ensure the
-# build picks up the Kyber-timing-leak fix (GHSA-f2v9-5498-2vpp, patched 0.10.1)
-# and is past the HQC-correctness bug (GHSA-gpf4-vrrw-r8v7). Override at build
-# time only after auditing the new ref:
-#   docker build --build-arg LIBOQS_REF=0.13.0 ...
-FROM python:3.12-slim AS builder
+# LIBOQS_REF is pinned to a release tag for reproducibility. It MUST be
+# minor-compatible with the liboqs-python binding in requirements.txt
+# (liboqs-python 0.14.x <-> liboqs C 0.14.x) — a mismatch causes an
+# undefined-symbol error at `import oqs`. 0.14.0 is past the Kyber-timing-leak
+# fix (GHSA-f2v9-5498-2vpp, 0.10.1) and the HQC-correctness bug
+# (GHSA-gpf4-vrrw-r8v7). Override only after auditing the new ref AND bumping
+# the binding to match:
+#   docker build --build-arg LIBOQS_REF=0.14.0 ...
+# Base image pinned by digest for reproducible, tamper-resistant builds.
+# python:3.12-slim resolved 2026-05-31. Dependabot bumps the digest; rebuild on
+# a security cadence to pick up patched OS packages (apt-get upgrade also runs below).
+FROM python:3.12-slim@sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203 AS builder
 
-ARG LIBOQS_REF=0.12.0
+ARG LIBOQS_REF=0.14.0
 
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
       build-essential cmake ninja-build git ca-certificates libssl-dev \
@@ -25,7 +31,7 @@ RUN git clone --depth 1 --branch ${LIBOQS_REF} https://github.com/open-quantum-s
     && ninja && ninja install \
     && ldconfig
 
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203
 
 # Copy liboqs shared library from builder
 COPY --from=builder /usr/local/lib/liboqs* /usr/local/lib/
@@ -56,4 +62,6 @@ EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 \
   CMD ["python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2).status==200 else 1)"]
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+# app.server is a thin launcher that adds native TLS / mTLS when PQKMS_TLS_* is
+# set; otherwise it serves plain HTTP for a TLS-terminating reverse proxy.
+CMD ["python", "-m", "app.server"]

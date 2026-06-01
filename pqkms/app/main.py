@@ -13,7 +13,7 @@ import os
 import sys
 import base64
 import logging
-import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -27,17 +27,25 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
-from .storage.db import Database
+from .storage.repository import make_repository
 from .storage.keystore import KeyStore
-from .storage.audit import AuditLog
+from .storage.audit import AuditLog, load_or_create_audit_signing_key
+from .storage.audit_sink import make_audit_sink
+from .custody import make_custodian
 from .api.auth import TokenAuth, SCOPES_ADMIN
 from .api.routes import build_router
+from .crypto.kem import HybridKEM
 from .crypto.signatures import HybridSigner
-from .crypto.suites import Suite, SUITE_NAMES
-from .crypto.aead import AEAD
+from .obs import (
+    RequestObservabilityMiddleware,
+    configure_logging,
+    metrics_response,
+    request_id_var,
+    set_unlocked,
+)
 
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s :: %(message)s")
+configure_logging()
 log = logging.getLogger("pqkms")
 
 
@@ -96,72 +104,112 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return resp
 
 
-def _load_or_create_audit_signing_key(ks: KeyStore) -> tuple[bytes, bytes, Suite]:
-    """
-    Audit signing keypair is stored as a special meta row, encrypted under the Root KEK.
-    This keeps the audit log tamper-evident even if the DB is copied off-box.
-    """
-    META_KEY = "audit_signing_keypair_v1"
-    c = ks.db.conn()
-    row = c.execute("SELECT v FROM kms_meta WHERE k=?", (META_KEY,)).fetchone()
-    if row:
-        wrapped = bytes(row["v"])
-        raw = ks._unwrap(wrapped, aad=b"pqkms/audit-signing/v1")
-        # format: [2B suite][4B priv_len][priv][pub]
-        import struct
-        suite_id, priv_len = struct.unpack("!HI", raw[:6])
-        priv = raw[6:6+priv_len]
-        pub = raw[6+priv_len:]
-        return priv, pub, Suite(suite_id)
-
-    kp = HybridSigner.generate()
-    import struct
-    packed = struct.pack("!HI", int(kp.suite), len(kp.private_key)) + kp.private_key + kp.public_key
-    wrapped = ks._wrap(packed, aad=b"pqkms/audit-signing/v1")
-    c.execute("INSERT INTO kms_meta(k,v) VALUES(?,?)", (META_KEY, wrapped))
-    log.info("generated new audit-log signing keypair (%s)", SUITE_NAMES[kp.suite])
-    return kp.private_key, kp.public_key, kp.suite
-
-
 def _validate_passphrase(passphrase: str, min_len: int) -> None:
     if len(passphrase) < min_len:
         log.error(
-            "PQKMS_PASSPHRASE is shorter than the minimum required length (%d). "
+            "Operator passphrase is shorter than the minimum required length (%d). "
             "Set a longer passphrase or override PQKMS_MIN_PASSPHRASE_LEN.",
             min_len,
         )
         sys.exit(1)
 
 
-def create_app() -> FastAPI:
-    data_dir = Path(os.environ.get("PQKMS_DATA_DIR", "/var/lib/pqkms"))
-    data_dir.mkdir(parents=True, exist_ok=True)
-    db_path = str(data_dir / "pqkms.sqlite")
+def _load_passphrase() -> str:
+    """
+    Resolve the operator passphrase. A mounted secret file
+    (PQKMS_PASSPHRASE_FILE) takes precedence over the PQKMS_PASSPHRASE env var,
+    because env vars leak via `docker inspect` and `/proc/<pid>/environ`. The
+    file path is the recommended production posture (Docker/K8s secrets).
+
+    A single trailing newline is stripped (secret tooling and `echo` append one);
+    any other whitespace is preserved as part of the passphrase. Fails closed.
+    """
+    pf = os.environ.get("PQKMS_PASSPHRASE_FILE")
+    if pf:
+        try:
+            data = Path(pf).read_text(encoding="utf-8")
+        except OSError as e:
+            log.error("PQKMS_PASSPHRASE_FILE (%s) could not be read: %s", pf, e)
+            sys.exit(1)
+        passphrase = data[:-1] if data.endswith("\n") else data
+        passphrase = passphrase[:-1] if passphrase.endswith("\r") else passphrase
+        if not passphrase:
+            log.error("PQKMS_PASSPHRASE_FILE (%s) is empty", pf)
+            sys.exit(1)
+        return passphrase
 
     passphrase = os.environ.get("PQKMS_PASSPHRASE")
     if not passphrase:
-        log.error("PQKMS_PASSPHRASE environment variable is required")
+        log.error("PQKMS_PASSPHRASE or PQKMS_PASSPHRASE_FILE environment variable is required")
         sys.exit(1)
+    return passphrase
+
+
+def _truthy(val: "str | None", default: bool) -> bool:
+    if val is None:
+        return default
+    return val.strip().lower() not in ("0", "false", "no", "off", "")
+
+
+def _enforce_pq_requirement() -> None:
+    """
+    A post-quantum KMS must not silently degrade to classical-only crypto.
+    With PQKMS_REQUIRE_PQ enabled (the default), refuse to start if liboqs is
+    unavailable. Operators who knowingly want classical-only (e.g. a Windows
+    dev box without liboqs) must opt out explicitly with PQKMS_REQUIRE_PQ=0.
+    """
+    require_pq = _truthy(os.environ.get("PQKMS_REQUIRE_PQ"), default=True)
+    pq_ok = HybridKEM.is_hybrid_available() and HybridSigner.is_hybrid_available()
+    if require_pq and not pq_ok:
+        log.error(
+            "PQKMS_REQUIRE_PQ is enabled but liboqs (post-quantum primitives) is "
+            "unavailable. The KMS would fall back to CLASSICAL-ONLY crypto, which "
+            "defeats its purpose. Refusing to start. Install liboqs (see "
+            "deploy/Dockerfile) or set PQKMS_REQUIRE_PQ=0 to allow classical-only."
+        )
+        sys.exit(1)
+    if not pq_ok:
+        log.warning(
+            "liboqs unavailable — running in CLASSICAL-ONLY mode "
+            "(PQKMS_REQUIRE_PQ explicitly disabled). New material is tagged with "
+            "CLASSIC_* suites and is NOT post-quantum protected."
+        )
+
+
+def create_app() -> FastAPI:
+    # Refuse to start as a classical-only "post-quantum" KMS unless explicitly allowed.
+    _enforce_pq_requirement()
+
+    data_dir = Path(os.environ.get("PQKMS_DATA_DIR", "/var/lib/pqkms"))
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    passphrase = _load_passphrase()
     min_len = int(os.environ.get("PQKMS_MIN_PASSPHRASE_LEN", DEFAULT_MIN_PASSPHRASE_LEN))
     _validate_passphrase(passphrase, min_len)
 
-    db = Database(db_path)
-    ks = KeyStore(db)
+    # PQKMS_DB_URL selects the backend (Postgres for HA); defaults to a SQLite
+    # file under the data dir for the single-node quickstart.
+    repo = make_repository(data_dir=str(data_dir))
+    custodian = make_custodian(passphrase)
+    ks = KeyStore(repo, custodian)
 
     if not ks.is_initialized():
-        log.info("bootstrapping new KMS at %s", db_path)
-        ks.initialize(passphrase)
+        log.info("bootstrapping new KMS (custody backend: %s)", custodian.backend_id)
+        ks.initialize()
     else:
-        log.info("unlocking existing KMS at %s", db_path)
-        ks.unlock(passphrase)
+        log.info("unlocking existing KMS (custody backend: %s)", custodian.backend_id)
+        ks.unlock()
 
-    audit_priv, audit_pub, audit_suite = _load_or_create_audit_signing_key(ks)
-    audit = AuditLog(db, (audit_priv, audit_pub, audit_suite))
+    audit_keypair = load_or_create_audit_signing_key(ks)
+    audit_sink = make_audit_sink(os.environ.get("PQKMS_AUDIT_LOG_FILE"))
+    audit = AuditLog(repo, audit_keypair, sink=audit_sink)
 
-    auth = TokenAuth(db)
+    auth = TokenAuth(repo)
 
-    # bootstrap admin token if none exists
-    if not auth.has_any_token():
+    # Bootstrap admin token if none exists. The if_absent sentinel makes this
+    # single-shot across replicas: only the winner creates and prints the token,
+    # so it isn't minted (or logged) once per replica on a cold HA start.
+    if not auth.has_any_token() and repo.put_meta("bootstrap_admin_issued_v1", b"1", if_absent=True):
         tid, raw = auth.create_token(name="bootstrap-admin", scopes={SCOPES_ADMIN})
         log.warning("=" * 72)
         log.warning("BOOTSTRAP ADMIN TOKEN (only shown once, save it now):")
@@ -176,17 +224,49 @@ def create_app() -> FastAPI:
 
     max_body = int(os.environ.get("PQKMS_MAX_BODY_BYTES", DEFAULT_MAX_BODY_BYTES))
 
-    limiter = Limiter(key_func=get_remote_address, default_limits=["120/minute"])
+    # Rate-limit storage. In-memory is per-process, so it does not hold across
+    # replicas — point PQKMS_REDIS_URL at a shared Redis for HA. Rate limiting
+    # fails OPEN: an in-memory fallback plus swallow_errors means a Redis outage
+    # degrades to local limiting / no limiting rather than denying all traffic
+    # (availability beats strict limiting for a KMS). The nonce budget, by
+    # contrast, fails CLOSED — see app/policy.py.
+    redis_url = os.environ.get("PQKMS_REDIS_URL")
+    limiter_kwargs = dict(key_func=get_remote_address, default_limits=["120/minute"])
+    if redis_url:
+        limiter_kwargs.update(
+            storage_uri=redis_url,
+            in_memory_fallback_enabled=True,
+            swallow_errors=True,
+        )
+    limiter = Limiter(**limiter_kwargs)
+    log.info("rate-limit storage: %s", "redis (shared)" if redis_url else "in-memory (per-process)")
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        # Force a WAL checkpoint at startup and shutdown so committed writes are
+        # flushed to the main db file and not stranded in the WAL across an
+        # unclean restart. (Replaces the deprecated @app.on_event hooks.)
+        repo.checkpoint()
+        log.info("storage checkpoint completed on startup")
+        try:
+            yield
+        finally:
+            repo.checkpoint()
+            log.info("storage checkpoint completed on shutdown")
 
     app = FastAPI(
         title="PQ-KMS",
         description="Post-Quantum Key Management System",
         version="1.0.0",
+        lifespan=lifespan,
     )
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=max_body)
     app.add_middleware(SecurityHeadersMiddleware)
+    # Added last → outermost: assigns the request id before anything else runs
+    # and times the whole request.
+    app.add_middleware(RequestObservabilityMiddleware)
 
     # Generic exception handlers so internal exception messages are not reflected
     # to the caller. Each error gets a request id that the operator can correlate
@@ -202,24 +282,16 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(Exception)
     async def unhandled_handler(request: Request, exc: Exception):
-        rid = uuid.uuid4().hex[:12]
-        log.exception("unhandled exception [rid=%s] on %s %s", rid, request.method, request.url.path)
+        # Reuse the per-request id assigned by the observability middleware so the
+        # caller-facing request_id matches the correlated server log line.
+        rid = request_id_var.get()
+        log.exception("unhandled exception on %s %s", request.method, request.url.path)
         return JSONResponse(
             status_code=500,
             content={"detail": "internal error", "request_id": rid},
         )
 
     app.include_router(build_router(ks, audit, auth, limiter))
-
-    @app.on_event("startup")
-    async def _checkpoint_on_start():
-        db.checkpoint()
-        log.info("SQLite WAL checkpoint completed on startup")
-
-    @app.on_event("shutdown")
-    async def _checkpoint_on_shutdown():
-        db.checkpoint()
-        log.info("SQLite WAL checkpoint completed on shutdown")
 
     # Admin UI
     ui_dir = Path(__file__).parent / "ui"
@@ -239,6 +311,13 @@ def create_app() -> FastAPI:
             "pq_available": HybridSigner.is_hybrid_available(),
         })
 
+    @app.get("/metrics")
+    def metrics():
+        """Prometheus exposition. Scrape from the internal network only — the
+        reverse proxy must not expose this publicly."""
+        set_unlocked(ks.is_unlocked())
+        return metrics_response()
+
     @app.get("/health")
     def health():
         """Liveness probe — used by docker healthcheck and operator
@@ -251,11 +330,7 @@ def create_app() -> FastAPI:
             unlocked = ks.is_unlocked() if hasattr(ks, "is_unlocked") else True
         except Exception:
             unlocked = False
-        try:
-            db.conn().execute("SELECT 1").fetchone()
-            db_ok = True
-        except Exception:
-            db_ok = False
+        db_ok = repo.ping()
         ok = unlocked and db_ok
         return JSONResponse(
             status_code=200 if ok else 503,

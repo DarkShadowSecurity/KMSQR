@@ -21,23 +21,39 @@ def derive_key(
     ).derive(ikm)
 
 
+# OWASP-recommended Argon2id minimums for interactive use. These are the
+# legacy/default parameters; they are persisted in the custody envelope metadata
+# so they can be tuned later without breaking the ability to unwrap older roots.
+DEFAULT_ARGON2_PARAMS = {
+    "time_cost": 3,
+    "memory_cost": 65536,  # 64 MiB
+    "parallelism": 4,
+    "hash_len": 32,
+}
+
+
 def derive_from_passphrase(
     passphrase: str,
     salt: bytes,
     length: int = 32,
+    *,
+    time_cost: int = 3,
+    memory_cost: int = 65536,
+    parallelism: int = 4,
 ) -> bytes:
     """
     Argon2id for deriving the root-KEK-wrapping key from an operator passphrase.
 
-    Parameters are OWASP-recommended minimums for interactive use.
+    Cost parameters default to the OWASP-recommended interactive minimums but are
+    overridable so the custodian can record (and later evolve) them per envelope.
     In production, prefer HSM-backed root keys over passphrase derivation.
     """
     return hash_secret_raw(
         secret=passphrase.encode("utf-8"),
         salt=salt,
-        time_cost=3,
-        memory_cost=65536,  # 64 MiB
-        parallelism=4,
+        time_cost=time_cost,
+        memory_cost=memory_cost,
+        parallelism=parallelism,
         hash_len=length,
         type=Type.ID,
     )

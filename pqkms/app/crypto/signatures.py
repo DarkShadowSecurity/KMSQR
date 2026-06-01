@@ -21,7 +21,10 @@ from .suites import Suite
 try:
     import oqs
     _OQS_AVAILABLE = True
-except ImportError:
+except Exception:
+    # See app/crypto/kem.py: a liboqs C/binding version mismatch raises
+    # AttributeError at import, not ImportError. Degrade gracefully instead of
+    # crashing; PQKMS_REQUIRE_PQ enforces the post-quantum requirement at startup.
     _OQS_AVAILABLE = False
 
 PQ_SIG_ALG = "ML-DSA-65"
@@ -107,14 +110,27 @@ class HybridSigner:
         public_key: bytes,
         message: bytes,
         signature: bytes,
+        expected_suite=None,
         classical_pub_len: int = ED25519_PUB_LEN,
     ) -> bool:
+        """Verify a hybrid signature.
+
+        The suite is read from the signature blob, which on the verification path
+        is attacker-controlled. `expected_suite` is the suite recorded with the
+        signing KEY; when provided, the signature's declared suite must match it.
+        This blocks a downgrade attack where a `CLASSIC_ED25519`-tagged signature
+        is presented against a HYBRID key to skip the post-quantum (ML-DSA) half.
+        Callers verifying against a known key MUST pass `expected_suite`.
+        """
         if len(signature) < 6:
             return False
         suite_id, c_sig_len = struct.unpack("!HI", signature[:6])
         try:
             suite = Suite(suite_id)
         except ValueError:
+            return False
+        # Anti-downgrade: refuse a signature whose suite differs from the key's.
+        if expected_suite is not None and suite != expected_suite:
             return False
         c_sig = signature[6 : 6 + c_sig_len]
         pq_sig = signature[6 + c_sig_len :]

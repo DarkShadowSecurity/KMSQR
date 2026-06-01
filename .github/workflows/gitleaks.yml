@@ -27,6 +27,9 @@ jobs:
         # gitleaks/gitleaks-action v2.3.9 — pinned by SHA.
         uses: gitleaks/gitleaks-action@83373cf2f8c4db6e24b41c1a9b086bb9619e9cd3
         env:
+          # gitleaks-action v2 requires GITHUB_TOKEN to enumerate pull-request
+          # commits via the API; without it, PR scans error out.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # GITLEAKS_LICENSE is only required for GitHub *organisations*. For a
           # user-owned public repo this can be omitted. Add it as a repo secret
           # if you move the repo under an org account.
