@@ -58,19 +58,24 @@ jobs:
         uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
         with:
           python-version: "3.12"
-      - name: Build liboqs (ml_kem_768 + ml_dsa_65)
+      - name: Build liboqs (ml_kem_768 + ml_dsa_65, user-local, no elevation)
         working-directory: ${{ runner.temp }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential cmake ninja-build git libssl-dev
+          # ubuntu-latest ships gcc/make/cmake/git preinstalled, so no apt-get
+          # (and therefore no privilege elevation) is needed. Build with the
+          # default Make generator (no ninja), without OpenSSL (liboqs has its
+          # own AES/SHA), and install into a user-writable prefix exposed via
+          # LD_LIBRARY_PATH — no system-wide install and no ldconfig.
           git clone --depth 1 --branch "$LIBOQS_REF" https://github.com/open-quantum-safe/liboqs.git
-          cd liboqs && mkdir build && cd build
-          cmake -GNinja -DCMAKE_INSTALL_PREFIX=/usr/local \
+          cmake -S liboqs -B liboqs/build \
+                -DCMAKE_INSTALL_PREFIX="$HOME/.local" \
                 -DBUILD_SHARED_LIBS=ON \
                 -DOQS_BUILD_ONLY_LIB=ON \
                 -DOQS_MINIMAL_BUILD="KEM_ml_kem_768;SIG_ml_dsa_65" \
-                ..
-          ninja && sudo ninja install && sudo ldconfig
+                -DOQS_USE_OPENSSL=OFF
+          cmake --build liboqs/build --parallel
+          cmake --install liboqs/build
+          echo "LD_LIBRARY_PATH=$HOME/.local/lib" >> "$GITHUB_ENV"
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip

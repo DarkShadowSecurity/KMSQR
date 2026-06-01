@@ -8,6 +8,7 @@ through injected fake clients/wrappers so their envelope-first logic is covered
 without AWS/GCP/an HSM; real integration is gated on that infrastructure.
 """
 import itertools
+import secrets
 
 import pytest
 
@@ -17,6 +18,12 @@ from app.custody.shamir import split_secret, combine_shares, ShamirCustodian
 from app.custody.awskms import AwsKmsCustodian
 from app.custody.gcpkms import GcpKmsCustodian
 from app.custody.pkcs11 import Pkcs11Custodian
+
+
+def _random_passphrase() -> str:
+    """Generate an ephemeral test passphrase. Generated (not a hardcoded
+    literal) so no credential string is committed to the repo."""
+    return "pw-" + secrets.token_hex(12)
 
 
 # ------------------------------------------------------------------- Shamir ---
@@ -40,7 +47,7 @@ def test_shamir_fewer_than_k_does_not_reconstruct():
 
 
 def test_shamir_custodian_roundtrip():
-    passphrase = "a-strong-operator-passphrase"
+    passphrase = _random_passphrase()
     shares = split_secret(passphrase.encode("utf-8"), n=4, k=2)
     cust = ShamirCustodian(shares[:2])
     root = AEAD.generate_key()
@@ -51,7 +58,7 @@ def test_shamir_custodian_roundtrip():
 def test_shamir_interoperates_with_passphrase_envelope():
     # An envelope sealed by a plain passphrase must unlock via Shamir shares of
     # that same passphrase (and vice versa) — both report backend_id "passphrase".
-    passphrase = "shared-operator-passphrase-1"
+    passphrase = _random_passphrase()
     root = AEAD.generate_key()
     env = PassphraseCustodian(passphrase).initialize(root)
 
