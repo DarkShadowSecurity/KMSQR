@@ -66,3 +66,36 @@ Scanner reported four matches in `pqkms/app/main.py`. Manual inspection confirms
 | HTTP reference — e2e_integration.py:41        | info     | **Justified (loopback)**   |
 
 All actionable findings (genuine LICENSE gap + cryptography CVE) are remediated. All other findings are documented false positives or build/test-only references that conform to the project's egress posture.
+
+---
+
+# Scan `e53b2154` — 2026-06-01 (8 findings: 0 crit / 0 high / 4 med / 2 low / 2 info)
+
+All findings are in build/test tooling, not the runtime KMS. None are remotely
+exploitable.
+
+## 1–4. MEDIUM — `[priv] sudo / elevation` in `.github/workflows/ci.yml` — **FIXED**
+
+The Linux post-quantum CI job built liboqs with `sudo apt-get`, `sudo ninja
+install`, and `sudo ldconfig`. Rewrote the build step to use **no elevation**:
+it relies on the compiler/CMake/Git preinstalled on `ubuntu-latest` (no
+`apt-get`), builds with the default Make generator (drops `ninja-build`) and
+`-DOQS_USE_OPENSSL=OFF` (drops `libssl-dev`), and installs into a user-writable
+prefix (`$HOME/.local`) exposed via `LD_LIBRARY_PATH` (no system install /
+`ldconfig`). Validated locally in a container: user-local build yields a working
+`liboqs 0.15.0` and `import oqs` succeeds with no elevation.
+
+## 5–6. LOW — `Hardcoded credential (passphrase)` in `pqkms/tests/test_phase9.py` — **FIXED**
+
+Two unit tests assigned a literal string to a `passphrase` variable (test
+fixtures, never real credentials). Both now derive the value at runtime from
+`secrets.token_hex(...)` via a `_random_passphrase()` helper, so no credential
+literal is committed. No rotation needed (test-only inputs).
+
+## 7–8. INFO — `[net] outbound URL` (ci.yml:66, Dockerfile:24) — **JUSTIFIED (build-only)**
+
+Both are the build-time `git clone` of the Open Quantum Safe liboqs source
+(ML-KEM-768 / ML-DSA-65), pinned to the `LIBOQS_REF` release tag (0.15.0). Egress
+to `github.com` is required only at build/CI time; the runtime image initiates no
+outbound connections. Same posture as the prior scan above. Optional future
+hardening: pin to an immutable commit SHA or vendor a checksum-verified tarball.
