@@ -1,0 +1,15 @@
+# gitleaks configuration — extends the built-in default ruleset and allowlists
+# documented false positives (commit-independent, unlike a .gitleaksignore
+# fingerprint which embeds a specific commit/line).
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Documented false positives — see Vulnerabilities/REMEDIATION.md"
+# SECURITY.md is the security-policy document. Its scope section ("key handling,
+# KDF/KEM/AEAD/signature misuse, ...") trips the generic-api-key high-entropy
+# heuristic. It is descriptive prose, not a credential, so exclude this single
+# documentation file from secret scanning.
+paths = [
+  '''(^|/)SECURITY\.md$''',
+]

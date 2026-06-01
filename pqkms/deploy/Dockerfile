@@ -11,12 +11,13 @@
 #   docker build --build-arg LIBOQS_REF=0.15.0 ...
 # Base image pinned by digest for reproducible, tamper-resistant builds.
 # python:3.12-slim resolved 2026-05-31. Dependabot bumps the digest; rebuild on
-# a security cadence to pick up patched OS packages (apt-get upgrade also runs below).
+# a security cadence to pick up patched OS packages. (We deliberately do NOT run
+# `apt-get upgrade` — patches arrive via digest bumps, keeping builds reproducible.)
 FROM python:3.12-slim@sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203 AS builder
 
 ARG LIBOQS_REF=0.15.0
 
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential cmake ninja-build git ca-certificates libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
@@ -38,7 +39,7 @@ COPY --from=builder /usr/local/lib/liboqs* /usr/local/lib/
 COPY --from=builder /usr/local/include/oqs /usr/local/include/oqs
 RUN ldconfig
 
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y --no-install-recommends \
       libssl3 tini \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -r pqkms && useradd -r -g pqkms -d /var/lib/pqkms -m pqkms

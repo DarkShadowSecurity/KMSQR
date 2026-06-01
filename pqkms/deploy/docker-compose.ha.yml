@@ -58,7 +58,7 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
-    image: pqkms:latest
+    image: pqkms:1.0.0
     environment:
       <<: *pqkms-env
     # PG password must reach psycopg; export it from the secret then run init.
@@ -79,7 +79,7 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
-    image: pqkms:latest
+    image: pqkms:1.0.0
     environment:
       <<: *pqkms-env
     entrypoint: ["/bin/sh", "-c"]

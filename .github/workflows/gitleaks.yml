@@ -15,22 +15,28 @@ jobs:
   gitleaks:
     name: gitleaks
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Pinned gitleaks release and its published SHA-256 (verified before use).
+      GITLEAKS_VERSION: "8.30.1"
+      GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
     steps:
       - name: Checkout
-        # actions/checkout v4.2.2 — pinned by SHA. fetch-depth: 0 so gitleaks
-        # can scan the full commit history, not just the latest commit.
+        # actions/checkout pinned by SHA. fetch-depth: 0 so gitleaks scans the
+        # full commit history, not just the latest commit.
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 0
 
-      - name: Run gitleaks
-        # gitleaks/gitleaks-action v2.3.9 — pinned by SHA.
-        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e
-        env:
-          # gitleaks-action v2 requires GITHUB_TOKEN to enumerate pull-request
-          # commits via the API; without it, PR scans error out.
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # GITLEAKS_LICENSE is only required for GitHub *organisations*. For a
-          # user-owned public repo this can be omitted. Add it as a repo secret
-          # if you move the repo under an org account.
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+      - name: Run gitleaks (pinned binary — no third-party action, no secrets)
+        run: |
+          # Run the gitleaks binary directly rather than via the third-party
+          # composite action, so no repository secret is ever handed to
+          # third-party code. Scanning local git history needs no GITHUB_TOKEN.
+          # The release tarball is checksum-verified before execution, and
+          # .gitleaksignore (repo root) suppresses documented false positives.
+          curl -sSL -o gitleaks.tgz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum -c -
+          tar -xzf gitleaks.tgz gitleaks
+          ./gitleaks git . --redact --no-banner --exit-code 1
