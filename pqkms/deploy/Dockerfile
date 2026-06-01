@@ -12,7 +12,7 @@
 # Base image pinned by digest for reproducible, tamper-resistant builds.
 # python:3.12-slim resolved 2026-05-31. Dependabot bumps the digest; rebuild on
 # a security cadence to pick up patched OS packages (apt-get upgrade also runs below).
-FROM python:3.12-slim@sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203 AS builder
+FROM python:3.14-slim@sha256:c845af9399020c7e562969a13689e929074a10fd057acd1b1fad06a2fb068e97 AS builder
 
 ARG LIBOQS_REF=0.14.0
 
@@ -31,7 +31,7 @@ RUN git clone --depth 1 --branch ${LIBOQS_REF} https://github.com/open-quantum-s
     && ninja && ninja install \
     && ldconfig
 
-FROM python:3.12-slim@sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203
+FROM python:3.14-slim@sha256:c845af9399020c7e562969a13689e929074a10fd057acd1b1fad06a2fb068e97
 
 # Copy liboqs shared library from builder
 COPY --from=builder /usr/local/lib/liboqs* /usr/local/lib/
