@@ -78,7 +78,7 @@ class AuditLog:
             expected = hashlib.sha384(prev_hash + payload).digest()
             if expected != r["entry_hash"]:
                 return False, r["seq"]
-            if not HybridSigner.verify(self._pub, expected, r["signature"]):
+            if not HybridSigner.verify(self._pub, expected, r["signature"], expected_suite=self._suite):
                 return False, r["seq"]
             prev_hash = expected
         return True, None

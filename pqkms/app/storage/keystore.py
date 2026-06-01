@@ -317,8 +317,10 @@ class KeyStore:
         if not mk or mk.key_type != "sig":
             raise ValueError("key not found or not a signing key")
         v = version or mk.current_version
-        _, _, public = self._load_version(key_id, v)
-        return HybridSigner.verify(public, message, base64.b64decode(signature_b64))
+        suite, _, public = self._load_version(key_id, v)
+        # Pass the key's stored suite so a downgraded (classical-tagged) signature
+        # cannot bypass the post-quantum half of a hybrid key.
+        return HybridSigner.verify(public, message, base64.b64decode(signature_b64), expected_suite=suite)
 
     def wrap_data_key(self, key_id: str, data_key: bytes) -> dict:
         """Hybrid-KEM-wrap a symmetric data key for storage or transport."""

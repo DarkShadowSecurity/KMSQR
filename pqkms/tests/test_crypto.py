@@ -82,6 +82,34 @@ def test_hybrid_sig_wrong_key_fails():
     assert not HybridSigner.verify(kp2.public_key, b"msg", sig)
 
 
+def test_hybrid_sig_downgrade_suite_mismatch_rejected():
+    """Anti-downgrade guard (liboqs-independent): a classical-tagged signature is
+    rejected when the key's expected suite is hybrid. verify() must not trust the
+    signature's own suite tag over the key's recorded suite."""
+    kp = HybridSigner.generate()
+    msg = b"authentic message"
+    classical_sig = HybridSigner.sign(kp.private_key, msg, Suite.CLASSIC_ED25519)
+    # Verifies under its true (classical) suite ...
+    assert HybridSigner.verify(kp.public_key, msg, classical_sig, expected_suite=Suite.CLASSIC_ED25519)
+    # ... but is refused when the key is expected to be hybrid (no PQ-half skip).
+    assert not HybridSigner.verify(
+        kp.public_key, msg, classical_sig, expected_suite=Suite.HYBRID_ED25519_MLDSA65
+    )
+
+
+def test_hybrid_sig_no_downgrade_on_hybrid_key():
+    """With a real hybrid key, a downgraded classical signature over the same
+    message must not verify when the hybrid suite is enforced. Requires liboqs."""
+    kp = HybridSigner.generate()
+    if kp.suite != Suite.HYBRID_ED25519_MLDSA65:
+        pytest.skip("liboqs unavailable; no hybrid key to downgrade")
+    msg = b"authentic message"
+    good = HybridSigner.sign(kp.private_key, msg, kp.suite)
+    downgraded = HybridSigner.sign(kp.private_key, msg, Suite.CLASSIC_ED25519)
+    assert HybridSigner.verify(kp.public_key, msg, good, expected_suite=kp.suite)
+    assert not HybridSigner.verify(kp.public_key, msg, downgraded, expected_suite=kp.suite)
+
+
 def test_hkdf_determinism():
     ikm = b"input-keying-material"
     salt = os.urandom(16)
