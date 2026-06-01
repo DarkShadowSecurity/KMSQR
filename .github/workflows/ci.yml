@@ -49,8 +49,8 @@ jobs:
     name: Unit + e2e (linux, post-quantum)
     runs-on: ubuntu-latest
     env:
-      # Must match the liboqs-python minor in requirements.txt (0.14.x).
-      LIBOQS_REF: "0.14.0"
+      # Must match the liboqs-python minor in requirements.txt (0.15.x).
+      LIBOQS_REF: "0.15.0"
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd

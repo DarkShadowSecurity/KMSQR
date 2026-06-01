@@ -5,7 +5,7 @@
 # Not needed for the single-node SQLite quickstart.
 
 # PostgreSQL driver — used when PQKMS_DB_URL=postgresql+psycopg://...
-psycopg[binary]==3.2.3
+psycopg[binary]==3.3.4
 
 # Shared rate-limit storage across replicas — used when PQKMS_REDIS_URL=redis://...
 redis==5.2.1
