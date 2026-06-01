@@ -30,7 +30,11 @@ from .suites import Suite
 try:
     import oqs  # liboqs-python
     _OQS_AVAILABLE = True
-except ImportError:
+except Exception:
+    # Catch more than ImportError: a C-library/binding version mismatch surfaces
+    # as AttributeError (undefined symbol) at import. Treat any failure as
+    # "PQ unavailable" so the app degrades gracefully (and PQKMS_REQUIRE_PQ can
+    # then refuse to start) rather than crashing with an unhandled exception.
     _OQS_AVAILABLE = False
 
 PQ_KEM_ALG = "ML-KEM-768"

@@ -21,7 +21,10 @@ from .suites import Suite
 try:
     import oqs
     _OQS_AVAILABLE = True
-except ImportError:
+except Exception:
+    # See app/crypto/kem.py: a liboqs C/binding version mismatch raises
+    # AttributeError at import, not ImportError. Degrade gracefully instead of
+    # crashing; PQKMS_REQUIRE_PQ enforces the post-quantum requirement at startup.
     _OQS_AVAILABLE = False
 
 PQ_SIG_ALG = "ML-DSA-65"

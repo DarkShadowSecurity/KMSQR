@@ -17,7 +17,7 @@ import argparse
 import os
 import sys
 
-from ..custody.shamir import split_secret, combine_shares, encode_share, decode_share
+from ..custody.shamir import split_secret, encode_share
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -26,8 +26,6 @@ def main(argv: list[str] | None = None) -> int:
     sp = sub.add_parser("split", help="split PQKMS_PASSPHRASE into shares")
     sp.add_argument("--n", type=int, required=True, help="total shares to produce")
     sp.add_argument("--k", type=int, required=True, help="threshold needed to reconstruct")
-    cp = sub.add_parser("combine", help="reconstruct from base64 shares (for testing)")
-    cp.add_argument("shares", nargs="+", help="base64 shares")
 
     args = parser.parse_args(argv)
 
@@ -37,15 +35,15 @@ def main(argv: list[str] | None = None) -> int:
             print("error: set PQKMS_PASSPHRASE to the passphrase to split", file=sys.stderr)
             return 2
         shares = split_secret(passphrase.encode("utf-8"), args.n, args.k)
+        # Run this in a private operator ceremony: each share is sensitive and
+        # must be distributed to a separate holder over a secure channel.
         print(f"# {args.k}-of-{args.n} Shamir shares — distribute to separate holders")
         for i, s in enumerate(shares, 1):
             print(f"share-{i}: {encode_share(s)}")
         return 0
 
-    if args.cmd == "combine":
-        secret = combine_shares([decode_share(s) for s in args.shares])
-        sys.stdout.write(secret.decode("utf-8"))
-        return 0
+    # Reconstruction is intentionally not exposed as a CLI that prints the
+    # secret; the shamir custody backend reassembles it in memory at boot.
     return 2
 
 

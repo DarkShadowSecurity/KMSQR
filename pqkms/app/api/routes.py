@@ -148,7 +148,7 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, limiter: Limite
         except KeyError:
             raise HTTPException(404, "not found")
         except Exception:
-            log.exception("key.rotate failed for %s", key_id)
+            log.exception("key.rotate failed")  # request correlated via X-Request-ID
             raise HTTPException(500, "internal error")
         audit.append(_actor(scopes), "key.rotate", target=key_id, detail={"new_version": mk.current_version})
         return mk
@@ -168,7 +168,7 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, limiter: Limite
             log.warning("key.encrypt rejected: %s", e)
             raise HTTPException(400, "invalid request")
         except Exception:
-            log.exception("key.encrypt failed unexpectedly for %s", key_id)
+            log.exception("key.encrypt failed unexpectedly")  # request correlated via X-Request-ID
             raise HTTPException(500, "internal error")
         audit.append(_actor(scopes), "key.encrypt", target=key_id, detail={"bytes": len(pt)})
         return out
@@ -183,7 +183,7 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, limiter: Limite
             log.warning("key.decrypt rejected: %s", e)
             raise HTTPException(400, "decrypt failed")
         except Exception:
-            log.exception("key.decrypt failed unexpectedly for %s", key_id)
+            log.exception("key.decrypt failed unexpectedly")  # request correlated via X-Request-ID
             raise HTTPException(500, "internal error")
         audit.append(_actor(scopes), "key.decrypt", target=key_id, detail={"bytes": len(pt)})
         return {"plaintext_b64": base64.b64encode(pt).decode()}
@@ -219,7 +219,7 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, limiter: Limite
             log.warning("key.unwrap rejected: %s", e)
             raise HTTPException(400, "unwrap failed")
         except Exception:
-            log.exception("key.unwrap failed unexpectedly for %s", key_id)
+            log.exception("key.unwrap failed unexpectedly")  # request correlated via X-Request-ID
             raise HTTPException(500, "internal error")
         audit.append(_actor(scopes), "key.unwrap", target=key_id)
         return {"data_key_b64": base64.b64encode(dk).decode()}
