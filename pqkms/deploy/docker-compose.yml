@@ -21,9 +21,22 @@ services:
       # Optional: cap request body size (bytes; default 16777216 = 16 MiB).
       # PQKMS_MAX_BODY_BYTES: "16777216"
     ports:
-      - "8080:8080"
+      # Bind to loopback only. The app serves plain HTTP unless PQKMS_TLS_* is
+      # set, so it must sit behind a TLS-terminating reverse proxy rather than be
+      # published to every host interface. Front it with a proxy (or publish a
+      # TLS listener) for off-box access; see the HA topology in
+      # docker-compose.ha.yml for the proxied pattern.
+      - "127.0.0.1:8080:8080"
     volumes:
       - pqkms-data:/var/lib/pqkms
+    # Cap memory/CPU so a runaway or hostile request load cannot exhaust the host.
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 512M
+        reservations:
+          memory: 128M
     healthcheck:
       test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8080/\", timeout=2)' || exit 1"]
       interval: 30s

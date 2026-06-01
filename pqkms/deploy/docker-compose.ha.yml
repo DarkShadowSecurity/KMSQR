@@ -90,6 +90,12 @@ services:
       - audit-log:/var/lib/pqkms/audit
     deploy:
       replicas: 3
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 512M
+        reservations:
+          memory: 128M
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
