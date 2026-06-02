@@ -2,10 +2,13 @@
 
 ## PQ-KMS
 
-PQ-KMS itself is free and open-source software, **copyright (c) 2026
-DarkShadowSec LLC, released under the MIT License.** See the `LICENSE` file in
-this directory for the governing terms. The software is provided "as is",
-without warranty of any kind.
+PQ-KMS is a product of, and is **registered to, DarkShadowSec LLC**. It is free
+and open-source software, **copyright © 2026 DarkShadowSec LLC, released under
+the MIT License** (free, including commercial use). See the `LICENSE` file in this
+directory for the governing terms and [`docs/LICENSING.md`](docs/LICENSING.md) for
+the full ownership and licensing statement. The software is provided "as is",
+**without warranty of any kind**, and DarkShadowSec LLC accepts no liability for
+its use.
 
 ## Third-Party Components
 
