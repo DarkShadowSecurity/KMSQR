@@ -143,6 +143,15 @@ defenses enabled out of the box:
   the key to get a fresh budget.
 - **Optional API-token expiry**: pass `ttl_seconds` when creating a token; expired
   tokens are rejected. Existing tokens remain non-expiring.
+- **OIDC SSO for human operators** (opt-in, `PQKMS_OIDC_ENABLED`): operators log
+  into the UI via your IdP (Okta, Entra ID, Keycloak, Google, …) using the
+  authorization-code + PKCE flow instead of pasting a token. The `id_token`
+  signature is verified against the IdP's JWKS with issuer/audience/expiry/nonce
+  checks; the IdP subject maps to a stable **human principal**, and group claims
+  map to scopes (`PQKMS_OIDC_ADMIN_GROUPS` → `admin`). Sessions are HMAC-signed,
+  HttpOnly cookies; machine clients keep using bearer tokens (which need no IdP).
+  Endpoints: `GET /api/v1/auth/login` · `/callback` · `GET /auth/me` ·
+  `POST /auth/logout` · `GET /auth/config`.
 - **Attributable identities & audit**: every API token is a credential *of* a
   **principal** (a service or a human). Audit entries record the principal id as
   the actor — actions are attributable to a real identity rather than an
@@ -239,6 +248,9 @@ Before trusting it with real secrets, also:
 | `PQKMS_MIN_PASSPHRASE_LEN`    | `16`        | Reject shorter passphrases at startup.   |
 | `PQKMS_REQUIRE_PQ`           | `1`         | Refuse to start without liboqs (post-quantum). Set `0` to allow classical-only. |
 | `PQKMS_AUTHZ_MODE`           | `legacy`    | `legacy` = scope authorizes any key (historical). `strict` = non-admins also need a grant on the key/namespace. |
+| `PQKMS_OIDC_ENABLED`         | `0`         | `1` enables OIDC SSO for the UI. Requires `PQKMS_OIDC_ISSUER`, `_CLIENT_ID`, `_CLIENT_SECRET`, `_REDIRECT_URL`. |
+| `PQKMS_OIDC_ADMIN_GROUPS`    | (unset)     | Comma-separated IdP groups whose members get the `admin` scope; others get `PQKMS_OIDC_DEFAULT_SCOPES` (default `read`). |
+| `PQKMS_SESSION_SECRET`       | (random)    | HMAC key for SSO session cookies. Set explicitly so sessions survive restarts and validate across replicas. |
 | `PQKMS_CUSTODY_BACKEND`      | `passphrase`| Root-KEK custody backend: `passphrase`, `shamir`, `awskms`, `gcpkms`, or `pkcs11`. |
 | `PQKMS_MAX_BODY_BYTES`        | `16777216`  | Request body size cap (16 MiB).          |
 | `PQKMS_DATA_DIR`              | `/var/lib/pqkms` | SQLite + key-material location.     |

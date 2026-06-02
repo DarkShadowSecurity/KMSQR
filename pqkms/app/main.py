@@ -34,6 +34,8 @@ from .storage.audit_sink import make_audit_sink
 from .custody import make_custodian
 from .api.auth import TokenAuth, SCOPES_ADMIN
 from .api.authz import Authorizer, resolve_mode
+from .api.oidc import OidcConfig, OidcClient
+from .api.sessions import SessionManager
 from .api.routes import build_router
 from .crypto.kem import HybridKEM
 from .crypto.signatures import HybridSigner
@@ -214,6 +216,17 @@ def create_app() -> FastAPI:
     authz = Authorizer(repo, authz_mode)
     log.info("authorization mode: %s", authz_mode)
 
+    # Optional OIDC SSO for human operators. When disabled, sessions/oidc stay
+    # None and routes accept only bearer tokens (unchanged machine-client path).
+    oidc_config = OidcConfig.from_env()
+    sessions = None
+    oidc = None
+    if oidc_config.enabled:
+        sessions = SessionManager.from_secret_str(os.environ.get("PQKMS_SESSION_SECRET"))
+        oidc = OidcClient(oidc_config)
+        log.info("OIDC SSO enabled (issuer=%s)", oidc_config.issuer)
+    cookie_secure = _truthy(os.environ.get("PQKMS_SESSION_COOKIE_SECURE"), default=True)
+
     # Bootstrap admin token if none exists. The if_absent sentinel makes this
     # single-shot across replicas: only the winner creates and prints the token,
     # so it isn't minted (or logged) once per replica on a cold HA start.
@@ -302,7 +315,10 @@ def create_app() -> FastAPI:
     # Optional distributed tracing (no-op unless PQKMS_OTEL_ENABLED + deps present).
     setup_tracing(app)
 
-    app.include_router(build_router(ks, audit, auth, authz, limiter))
+    app.include_router(build_router(
+        ks, audit, auth, authz, limiter,
+        sessions=sessions, oidc=oidc, cookie_secure=cookie_secure,
+    ))
 
     # Admin UI
     ui_dir = Path(__file__).parent / "ui"
