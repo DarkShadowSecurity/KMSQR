@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from slowapi import Limiter
 
-from ..storage.keystore import KeyStore
+from ..storage.keystore import KeyStore, KeyStateError
 from ..storage.audit import AuditLog
 from ..policy import NonceBudgetExceeded
 from .auth import (
@@ -56,6 +56,20 @@ class CreateKeyReq(BaseModel):
     description: Optional[str] = Field(None, max_length=512)
     # Namespace (key-ring) name to create the key in. Defaults to "default".
     namespace: Optional[str] = Field(None, max_length=128)
+
+
+class ImportKeyReq(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    # Base64 of exactly 32 bytes of AES-256 key material (BYOK).
+    key_material_b64: str = Field(..., max_length=128)
+    description: Optional[str] = Field(None, max_length=512)
+    namespace: Optional[str] = Field(None, max_length=128)
+
+
+class ScheduleDeletionReq(BaseModel):
+    # Waiting period before the key becomes destroyable. Default 30 days; 7–30 is
+    # the typical safety window. 0 is allowed for ephemeral/test keys.
+    window_days: int = Field(30, ge=0, le=365)
 
 
 class EncryptReq(BaseModel):
@@ -124,6 +138,10 @@ def _safe_call(action: str, fn, *args, **kwargs):
         return fn(*args, **kwargs)
     except HTTPException:
         raise
+    except KeyStateError as e:
+        # The key exists but its lifecycle state forbids the operation.
+        log.warning("%s refused: %s", action, e)
+        raise HTTPException(409, f"key unavailable: {e}")
     except (ValueError, KeyError) as e:
         # ValueError / KeyError correspond to caller errors (bad key id, wrong type,
         # malformed input). It's safe to surface a 400 with a generic message; full
@@ -197,6 +215,70 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, authz: Authoriz
         audit.append(caller.actor, "key.rotate", target=key_id, detail={"new_version": mk.current_version})
         return mk
 
+    @r.post("/keys/import")
+    @limiter.limit("30/minute")
+    def import_key(request: Request, req: ImportKeyReq, caller=Depends(require_scope(auth, SCOPES_MANAGE))):
+        namespace_id = _namespace_id_for(req.namespace)
+        authz.authorize_namespace_op(caller, OP_MANAGE, namespace_id)
+        material = _b64decode(req.key_material_b64)
+        mk = _safe_call("key.import", ks.import_key, req.name, material, req.description, namespace_id)
+        audit.append(caller.actor, "key.import", target=mk.id,
+                     detail={"name": mk.name, "type": mk.key_type, "namespace_id": namespace_id, "origin": "imported"})
+        return mk
+
+    @r.get("/keys/{key_id}/public-key")
+    @limiter.limit("120/minute")
+    def public_key(request: Request, key_id: str, caller=Depends(require_scope(auth, SCOPES_READ))):
+        authz.authorize_key_op(caller, OP_READ, key_id)
+        return _safe_call("key.public_key", ks.export_public_key, key_id)
+
+    @r.post("/keys/{key_id}/disable")
+    @limiter.limit("30/minute")
+    def disable_key(request: Request, key_id: str, caller=Depends(require_scope(auth, SCOPES_MANAGE))):
+        authz.authorize_key_op(caller, OP_MANAGE, key_id)
+        mk = _safe_call("key.disable", ks.disable_key, key_id)
+        audit.append(caller.actor, "key.disable", target=key_id)
+        return mk
+
+    @r.post("/keys/{key_id}/enable")
+    @limiter.limit("30/minute")
+    def enable_key(request: Request, key_id: str, caller=Depends(require_scope(auth, SCOPES_MANAGE))):
+        authz.authorize_key_op(caller, OP_MANAGE, key_id)
+        mk = _safe_call("key.enable", ks.enable_key, key_id)
+        audit.append(caller.actor, "key.enable", target=key_id)
+        return mk
+
+    @r.post("/keys/{key_id}/schedule-deletion")
+    @limiter.limit("30/minute")
+    def schedule_deletion(request: Request, key_id: str, req: ScheduleDeletionReq,
+                          caller=Depends(require_scope(auth, SCOPES_MANAGE))):
+        authz.authorize_key_op(caller, OP_MANAGE, key_id)
+        mk = _safe_call("key.schedule_deletion", ks.schedule_deletion, key_id, req.window_days)
+        audit.append(caller.actor, "key.schedule_deletion", target=key_id,
+                     detail={"window_days": req.window_days, "deletion_at": mk.deletion_at})
+        return mk
+
+    @r.post("/keys/{key_id}/cancel-deletion")
+    @limiter.limit("30/minute")
+    def cancel_deletion(request: Request, key_id: str, caller=Depends(require_scope(auth, SCOPES_MANAGE))):
+        authz.authorize_key_op(caller, OP_MANAGE, key_id)
+        mk = _safe_call("key.cancel_deletion", ks.cancel_deletion, key_id)
+        audit.append(caller.actor, "key.cancel_deletion", target=key_id)
+        return mk
+
+    @r.delete("/keys/{key_id}")
+    @limiter.limit("10/minute")
+    def destroy_key(request: Request, key_id: str, force: bool = False,
+                    caller=Depends(require_scope(auth, SCOPES_MANAGE))):
+        # force=true bypasses the deletion window and requires the admin scope —
+        # an irreversible operation reserved for break-glass use.
+        if force and not caller.is_admin:
+            raise HTTPException(403, "force destruction requires the admin scope")
+        authz.authorize_key_op(caller, OP_MANAGE, key_id)
+        _safe_call("key.destroy", ks.destroy_key, key_id, force=force)
+        audit.append(caller.actor, "key.destroy", target=key_id, detail={"force": force})
+        return {"destroyed": True}
+
     # ---- AEAD encrypt/decrypt ----
     @r.post("/keys/{key_id}/encrypt")
     @limiter.limit("600/minute")
@@ -209,6 +291,9 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, authz: Authoriz
         except NonceBudgetExceeded as e:
             log.warning("key.encrypt refused: %s", e)
             raise HTTPException(409, "key nonce budget exhausted; rotate the key before encrypting more")
+        except KeyStateError as e:
+            log.warning("key.encrypt refused: %s", e)
+            raise HTTPException(409, f"key unavailable: {e}")
         except (ValueError, KeyError) as e:
             log.warning("key.encrypt rejected: %s", e)
             raise HTTPException(400, "invalid request")
@@ -225,6 +310,9 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, authz: Authoriz
         aad = _b64decode_optional(req.aad_b64)
         try:
             pt = ks.decrypt(key_id, req.ciphertext_b64, aad)
+        except KeyStateError as e:
+            log.warning("key.decrypt refused: %s", e)
+            raise HTTPException(409, f"key unavailable: {e}")
         except (ValueError, KeyError) as e:
             log.warning("key.decrypt rejected: %s", e)
             raise HTTPException(400, "decrypt failed")
@@ -265,6 +353,9 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, authz: Authoriz
         authz.authorize_key_op(caller, OP_DECRYPT, key_id)
         try:
             dk = ks.unwrap_data_key(key_id, req.encapsulation_b64, req.wrapped_key_b64, req.version)
+        except KeyStateError as e:
+            log.warning("key.unwrap refused: %s", e)
+            raise HTTPException(409, f"key unavailable: {e}")
         except (ValueError, KeyError) as e:
             log.warning("key.unwrap rejected: %s", e)
             raise HTTPException(400, "unwrap failed")

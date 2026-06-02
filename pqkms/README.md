@@ -78,6 +78,11 @@ All endpoints require `Authorization: Bearer <token>`.
 - `POST /api/v1/keys` — create a new managed key
 - `GET  /api/v1/keys` — list keys
 - `POST /api/v1/keys/{id}/rotate` — rotate, keeping old versions for decrypt
+- `POST /api/v1/keys/import` — BYOK: import external 32-byte AES-256 material
+- `GET  /api/v1/keys/{id}/public-key` — export the public half of a sig/kem key
+- `POST /api/v1/keys/{id}/disable` · `/enable` — toggle a key's usability
+- `POST /api/v1/keys/{id}/schedule-deletion` · `/cancel-deletion` — staged destruction
+- `DELETE /api/v1/keys/{id}` — destroy (after the window; `?force=true` is admin-only)
 - `POST /api/v1/keys/{id}/encrypt` — envelope-encrypt a payload
 - `POST /api/v1/keys/{id}/decrypt` — decrypt (auto-selects the right key version)
 - `POST /api/v1/keys/{id}/sign` — hybrid sign
@@ -144,6 +149,14 @@ defenses enabled out of the box:
   anonymous scope set. A service may hold several tokens against one principal
   (credential rotation); disabling or deleting a principal invalidates all of
   its tokens at once. Manage via `POST/GET /api/v1/principals`.
+- **Full key lifecycle**: keys have an explicit state — `enabled`, `disabled`,
+  or `pending_deletion`. Disabled and pending keys **refuse all crypto
+  operations** (HTTP 409). Deletion is staged: `schedule-deletion` sets a waiting
+  window (default 30 days), `cancel-deletion` reverts to disabled, and the key is
+  only destroyable once the window elapses (admins may `?force=true` for
+  break-glass). **BYOK** import brings external AES-256 material under the Root
+  KEK (tagged `origin=imported`), and the public half of signing/KEM keys is
+  exportable.
 - **Namespaces & per-resource authorization**: keys live in **namespaces**
   (key-rings) for tenant isolation, and **grants** bind a principal to a set of
   operations on a specific key or a whole namespace. Two authorization modes

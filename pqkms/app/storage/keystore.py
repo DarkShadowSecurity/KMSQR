@@ -47,6 +47,20 @@ class ManagedKey:
     suite: int
     public_material: Optional[str]  # base64, or None for symmetric
     namespace_id: Optional[str] = None
+    state: str = "enabled"          # 'enabled' | 'disabled' | 'pending_deletion'
+    deletion_at: Optional[str] = None
+    origin: str = "generated"        # 'generated' | 'imported'
+
+
+# Lifecycle states.
+KEY_ENABLED = "enabled"
+KEY_DISABLED = "disabled"
+KEY_PENDING_DELETION = "pending_deletion"
+
+
+class KeyStateError(Exception):
+    """Raised when an operation is attempted on a key whose lifecycle state
+    forbids it (disabled or pending deletion)."""
 
 
 class KeyStore:
@@ -201,7 +215,8 @@ class KeyStore:
             mk={
                 "id": key_id, "name": name, "key_type": key_type,
                 "current_version": 1, "created_at": created_at, "description": description,
-                "namespace_id": namespace_id,
+                "namespace_id": namespace_id, "state": KEY_ENABLED,
+                "deletion_at": None, "origin": "generated",
             },
             kv={
                 "key_id": key_id, "version": 1, "suite": int(suite),
@@ -214,8 +229,125 @@ class KeyStore:
             id=key_id, name=name, key_type=key_type, current_version=1,
             created_at=created_at, description=description, suite=int(suite),
             public_material=base64.b64encode(public).decode() if public else None,
-            namespace_id=namespace_id,
+            namespace_id=namespace_id, state=KEY_ENABLED, origin="generated",
         )
+
+    def import_key(
+        self,
+        name: str,
+        key_material: bytes,
+        description: Optional[str] = None,
+        namespace_id: Optional[str] = None,
+    ) -> ManagedKey:
+        """BYOK: create a managed AEAD key from externally supplied material
+        (e.g. exported from another KMS or an HSM). The material must be a 32-byte
+        AES-256 key. It is wrapped under the Root KEK exactly like generated keys;
+        only its `origin` differs ('imported'), which is surfaced for audit."""
+        self._require_unlocked()
+        if len(key_material) != 32:
+            raise ValueError("imported AEAD key material must be exactly 32 bytes")
+        key_id = str(uuid.uuid4())
+        aad = f"pqkms/key/{key_id}/v1".encode()
+        wrapped = self._wrap(key_material, aad)
+        created_at = _now()
+        self.repo.create_key_with_version(
+            mk={
+                "id": key_id, "name": name, "key_type": "aead",
+                "current_version": 1, "created_at": created_at, "description": description,
+                "namespace_id": namespace_id, "state": KEY_ENABLED,
+                "deletion_at": None, "origin": "imported",
+            },
+            kv={
+                "key_id": key_id, "version": 1, "suite": int(Suite.AES256_GCM),
+                "wrapped_secret": wrapped, "public_material": None,
+                "created_at": created_at, "state": "active",
+            },
+        )
+        return ManagedKey(
+            id=key_id, name=name, key_type="aead", current_version=1,
+            created_at=created_at, description=description, suite=int(Suite.AES256_GCM),
+            public_material=None, namespace_id=namespace_id, state=KEY_ENABLED, origin="imported",
+        )
+
+    # ---- lifecycle ----
+
+    def _require_enabled(self, key_id: str) -> "ManagedKey":
+        """Fetch a key and require it to be enabled. Raises KeyError if missing,
+        KeyStateError if disabled / pending deletion. Used to gate crypto ops so a
+        disabled or to-be-destroyed key cannot be used."""
+        mk = self.get_key(key_id)
+        if not mk:
+            raise KeyError(key_id)
+        if mk.state != KEY_ENABLED:
+            raise KeyStateError(f"key is {mk.state}")
+        return mk
+
+    def disable_key(self, key_id: str) -> "ManagedKey":
+        if not self.get_key(key_id):
+            raise KeyError(key_id)
+        self.repo.set_key_state(key_id, KEY_DISABLED, deletion_at=None)
+        return self.get_key(key_id)
+
+    def enable_key(self, key_id: str) -> "ManagedKey":
+        mk = self.get_key(key_id)
+        if not mk:
+            raise KeyError(key_id)
+        if mk.state == KEY_PENDING_DELETION:
+            # Re-enabling a pending key is done via cancel_deletion (-> disabled).
+            raise KeyStateError("key is pending deletion; cancel deletion first")
+        self.repo.set_key_state(key_id, KEY_ENABLED, deletion_at=None)
+        return self.get_key(key_id)
+
+    def schedule_deletion(self, key_id: str, window_days: int) -> "ManagedKey":
+        if not self.get_key(key_id):
+            raise KeyError(key_id)
+        if window_days < 0:
+            raise ValueError("window_days must be >= 0")
+        from datetime import timedelta
+        deletion_at = (datetime.now(timezone.utc) + timedelta(days=window_days)).isoformat()
+        self.repo.set_key_state(key_id, KEY_PENDING_DELETION, deletion_at=deletion_at)
+        return self.get_key(key_id)
+
+    def cancel_deletion(self, key_id: str) -> "ManagedKey":
+        mk = self.get_key(key_id)
+        if not mk:
+            raise KeyError(key_id)
+        if mk.state != KEY_PENDING_DELETION:
+            raise KeyStateError("key is not pending deletion")
+        # Cancellation returns the key to disabled (operator must explicitly
+        # re-enable), matching common cloud-KMS semantics.
+        self.repo.set_key_state(key_id, KEY_DISABLED, deletion_at=None)
+        return self.get_key(key_id)
+
+    def destroy_key(self, key_id: str, *, force: bool = False) -> None:
+        """Permanently and irreversibly destroy a key. Only permitted once the key
+        is pending deletion and its window has elapsed, unless force=True (admin
+        override). Destroying a key makes every ciphertext under it undecryptable."""
+        mk = self.get_key(key_id)
+        if not mk:
+            raise KeyError(key_id)
+        if not force:
+            if mk.state != KEY_PENDING_DELETION:
+                raise KeyStateError("key must be pending deletion before destruction")
+            if mk.deletion_at is None or datetime.now(timezone.utc) < datetime.fromisoformat(mk.deletion_at):
+                raise KeyStateError("deletion window has not elapsed")
+        self.repo.destroy_key(key_id)
+
+    def export_public_key(self, key_id: str) -> dict:
+        """Return the public half of an asymmetric (sig/kem) key. AEAD keys have no
+        public material and raise ValueError."""
+        mk = self.get_key(key_id)
+        if not mk:
+            raise KeyError(key_id)
+        if mk.public_material is None:
+            raise ValueError("key has no public material (symmetric key)")
+        return {
+            "key_id": key_id,
+            "version": mk.current_version,
+            "key_type": mk.key_type,
+            "suite": SUITE_NAMES[Suite(mk.suite)],
+            "public_key_b64": mk.public_material,
+        }
 
     def _generate_material(self, key_type: str):
         if key_type == "aead":
@@ -236,6 +368,9 @@ class KeyStore:
             description=r["description"], suite=r["suite"],
             public_material=base64.b64encode(r["public_material"]).decode() if r["public_material"] else None,
             namespace_id=r.get("namespace_id"),
+            state=r.get("state") or KEY_ENABLED,
+            deletion_at=r.get("deletion_at"),
+            origin=r.get("origin") or "generated",
         )
 
     def list_keys(self) -> list[ManagedKey]:
@@ -280,8 +415,8 @@ class KeyStore:
     # ---- high-level crypto operations ----
 
     def encrypt(self, key_id: str, plaintext: bytes, aad: bytes = b"") -> dict:
-        mk = self.get_key(key_id)
-        if not mk or mk.key_type != "aead":
+        mk = self._require_enabled(key_id)
+        if mk.key_type != "aead":
             raise ValueError("key not found or not an AEAD key")
         suite, secret, _ = self._load_version(key_id, mk.current_version)
         # Reserve one slot in this key-version's AES-GCM nonce budget *before*
@@ -299,6 +434,7 @@ class KeyStore:
         }
 
     def decrypt(self, key_id: str, ciphertext_b64: str, aad: bytes = b"") -> bytes:
+        self._require_enabled(key_id)
         raw = base64.b64decode(ciphertext_b64)
         if len(raw) < 5:
             raise ValueError("ciphertext too short")
@@ -308,8 +444,8 @@ class KeyStore:
         return AEAD.decrypt(secret, blob, aad)
 
     def sign(self, key_id: str, message: bytes) -> dict:
-        mk = self.get_key(key_id)
-        if not mk or mk.key_type != "sig":
+        mk = self._require_enabled(key_id)
+        if mk.key_type != "sig":
             raise ValueError("key not found or not a signing key")
         suite, secret, public = self._load_version(key_id, mk.current_version)
         sig = HybridSigner.sign(secret, message, suite)
@@ -333,8 +469,8 @@ class KeyStore:
 
     def wrap_data_key(self, key_id: str, data_key: bytes) -> dict:
         """Hybrid-KEM-wrap a symmetric data key for storage or transport."""
-        mk = self.get_key(key_id)
-        if not mk or mk.key_type != "kem":
+        mk = self._require_enabled(key_id)
+        if mk.key_type != "kem":
             raise ValueError("key not found or not a KEM key")
         suite, _, public = self._load_version(key_id, mk.current_version)
         shared, encap = HybridKEM.encapsulate(public, suite)
@@ -348,8 +484,8 @@ class KeyStore:
         }
 
     def unwrap_data_key(self, key_id: str, encapsulation_b64: str, wrapped_b64: str, version: Optional[int] = None) -> bytes:
-        mk = self.get_key(key_id)
-        if not mk or mk.key_type != "kem":
+        mk = self._require_enabled(key_id)
+        if mk.key_type != "kem":
             raise ValueError("key not found or not a KEM key")
         v = version or mk.current_version
         _, secret, _ = self._load_version(key_id, v)
