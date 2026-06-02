@@ -42,6 +42,10 @@ jobs:
           PQKMS_REQUIRE_PQ: "0"
           PYTHONIOENCODING: utf-8
         run: python tests/e2e_integration.py
+      - name: Generate CycloneDX SBOM
+        # Dependency-free generator (no extra action to pin); proves the SBOM
+        # builds on every PR. Publishing + signing it is in deploy/RELEASE.md.
+        run: python -m app.cli.sbom --all -o sbom.cdx.json && python -c "import json;d=json.load(open('sbom.cdx.json'));print('SBOM components:',len(d['components']))"
 
   # Full post-quantum path on Linux. Builds liboqs from source (matching
   # deploy/Dockerfile's pinned LIBOQS_REF) so the hybrid suites are exercised
