@@ -1,0 +1,54 @@
+{
+  "title": "PQ-KMS",
+  "uid": "pqkms-overview",
+  "tags": ["pqkms"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {"from": "now-6h", "to": "now"},
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Replicas unlocked",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+      "targets": [{"expr": "sum(pqkms_unlocked)", "legendFormat": "unlocked"}],
+      "fieldConfig": {"defaults": {"thresholds": {"steps": [
+        {"color": "red", "value": null}, {"color": "green", "value": 1}]}}}
+    },
+    {
+      "type": "stat",
+      "title": "Replicas up",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+      "targets": [{"expr": "sum(up{job=\"pqkms\"})", "legendFormat": "up"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Request rate by route",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "targets": [{"expr": "sum by (route) (rate(pqkms_http_requests_total[5m]))", "legendFormat": "{{route}}"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "5xx error rate",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "targets": [{"expr": "sum(rate(pqkms_http_requests_total{status=~\"5..\"}[5m])) / sum(rate(pqkms_http_requests_total[5m]))", "legendFormat": "5xx ratio"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Request latency (p50 / p95 / p99)",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "targets": [
+        {"expr": "histogram_quantile(0.50, sum(rate(pqkms_http_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p50"},
+        {"expr": "histogram_quantile(0.95, sum(rate(pqkms_http_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p95"},
+        {"expr": "histogram_quantile(0.99, sum(rate(pqkms_http_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p99"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "409s on encrypt (nonce budget)",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+      "targets": [{"expr": "sum(rate(pqkms_http_requests_total{route=~\".*/encrypt\", status=\"409\"}[10m]))", "legendFormat": "encrypt 409/s"}]
+    }
+  ]
+}

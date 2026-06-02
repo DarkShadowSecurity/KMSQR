@@ -7,6 +7,7 @@ from .metrics import (
     metrics_response,
     set_unlocked,
 )
+from .tracing import setup_tracing
 
 __all__ = [
     "configure_logging",
@@ -14,4 +15,5 @@ __all__ = [
     "RequestObservabilityMiddleware",
     "metrics_response",
     "set_unlocked",
+    "setup_tracing",
 ]

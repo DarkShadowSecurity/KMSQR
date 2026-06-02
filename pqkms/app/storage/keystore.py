@@ -373,8 +373,8 @@ class KeyStore:
             origin=r.get("origin") or "generated",
         )
 
-    def list_keys(self) -> list[ManagedKey]:
-        return [self._row_to_managed_key(r) for r in self.repo.list_keys_current()]
+    def list_keys(self, *, limit: int = 200, offset: int = 0) -> list[ManagedKey]:
+        return [self._row_to_managed_key(r) for r in self.repo.list_keys_current(limit=limit, offset=offset)]
 
     def get_key(self, key_id: str) -> Optional[ManagedKey]:
         r = self.repo.get_key_current(key_id)

@@ -119,6 +119,7 @@ services:
     image: prom/prometheus:latest
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
     # Internal only — scrapes pqkms:8080/metrics over the compose network.
     expose: ["9090"]
     restart: unless-stopped

@@ -153,6 +153,16 @@ def _safe_call(action: str, fn, *args, **kwargs):
         raise HTTPException(500, "internal error")
 
 
+def _pagination(limit: int = 200, offset: int = 0) -> tuple[int, int]:
+    """Shared list pagination. Bounded so a caller cannot request an unbounded
+    scan. List endpoints keep returning a JSON array (ordered, newest first)."""
+    if limit < 1 or limit > 1000:
+        raise HTTPException(400, "limit out of range (1..1000)")
+    if offset < 0:
+        raise HTTPException(400, "offset must be >= 0")
+    return limit, offset
+
+
 def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, authz: Authorizer, limiter: Limiter) -> APIRouter:
     r = APIRouter(prefix="/api/v1")
 
@@ -187,8 +197,9 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, authz: Authoriz
 
     @r.get("/keys")
     @limiter.limit("120/minute")
-    def list_keys(request: Request, caller=Depends(require_scope(auth, SCOPES_READ))):
-        return authz.filter_visible_keys(caller, ks.list_keys())
+    def list_keys(request: Request, page: tuple = Depends(_pagination),
+                  caller=Depends(require_scope(auth, SCOPES_READ))):
+        return authz.filter_visible_keys(caller, ks.list_keys(limit=page[0], offset=page[1]))
 
     @r.get("/keys/{key_id}")
     @limiter.limit("120/minute")
@@ -398,7 +409,7 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, authz: Authoriz
     @r.get("/namespaces")
     @limiter.limit("60/minute")
     def list_namespaces(request: Request, caller=Depends(require_scope(auth, SCOPES_READ))):
-        return ks.repo.list_namespaces()
+        return ks.repo.list_namespaces()  # bounded set; pagination not needed
 
     # ---- grants ----
     @r.post("/grants")
@@ -434,9 +445,10 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, authz: Authoriz
 
     @r.get("/grants")
     @limiter.limit("60/minute")
-    def list_grants(request: Request, principal_id: Optional[str] = None,
+    def list_grants(request: Request, principal_id: Optional[str] = None, page: tuple = Depends(_pagination),
                     caller=Depends(require_scope(auth, SCOPES_ADMIN))):
-        rows = ks.repo.get_grants_for_principal(principal_id) if principal_id else ks.repo.list_grants()
+        rows = (ks.repo.get_grants_for_principal(principal_id) if principal_id
+                else ks.repo.list_grants(limit=page[0], offset=page[1]))
         return [{**g, "operations": sorted(o for o in g["operations"].split(",") if o)} for g in rows]
 
     @r.delete("/grants/{grant_id}")
@@ -462,8 +474,9 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, authz: Authoriz
 
     @r.get("/principals")
     @limiter.limit("60/minute")
-    def list_principals(request: Request, caller=Depends(require_scope(auth, SCOPES_ADMIN))):
-        return auth.list_principals()
+    def list_principals(request: Request, page: tuple = Depends(_pagination),
+                        caller=Depends(require_scope(auth, SCOPES_ADMIN))):
+        return auth.list_principals(limit=page[0], offset=page[1])
 
     @r.delete("/principals/{principal_id}")
     @limiter.limit("60/minute")
@@ -493,8 +506,9 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, authz: Authoriz
 
     @r.get("/tokens")
     @limiter.limit("60/minute")
-    def list_tokens(request: Request, caller=Depends(require_scope(auth, SCOPES_ADMIN))):
-        return auth.list_tokens()
+    def list_tokens(request: Request, page: tuple = Depends(_pagination),
+                    caller=Depends(require_scope(auth, SCOPES_ADMIN))):
+        return auth.list_tokens(limit=page[0], offset=page[1])
 
     @r.delete("/tokens/{token_id}")
     @limiter.limit("60/minute")

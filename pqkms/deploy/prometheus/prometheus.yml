@@ -2,6 +2,9 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+rule_files:
+  - /etc/prometheus/alerts.yml
+
 scrape_configs:
   # Scrape the app replicas over the internal compose network. Docker resolves
   # the `pqkms` service name to all replica IPs; dns_sd_configs discovers them.

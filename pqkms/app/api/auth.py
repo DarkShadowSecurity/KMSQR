@@ -84,8 +84,8 @@ class TokenAuth:
         })
         return pid
 
-    def list_principals(self) -> list[dict]:
-        return self.repo.list_principals()
+    def list_principals(self, *, limit: int = 200, offset: int = 0) -> list[dict]:
+        return self.repo.list_principals(limit=limit, offset=offset)
 
     def get_principal(self, principal_id: str) -> Optional[dict]:
         return self.repo.get_principal(principal_id)
@@ -143,8 +143,8 @@ class TokenAuth:
     def revoke(self, token_id: str):
         self.repo.revoke_token(token_id)
 
-    def list_tokens(self) -> list[dict]:
-        return self.repo.list_tokens()
+    def list_tokens(self, *, limit: int = 200, offset: int = 0) -> list[dict]:
+        return self.repo.list_tokens(limit=limit, offset=offset)
 
     def authenticate(self, raw_token: str) -> Optional[Caller]:
         """Resolve a raw bearer token to a Caller, or None if it is invalid,
