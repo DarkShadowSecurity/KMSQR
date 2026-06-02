@@ -1,0 +1,52 @@
+# Prometheus alerting rules for PQ-KMS.
+# Mounted at /etc/prometheus/alerts.yml and referenced by prometheus.yml's
+# rule_files. Wire an Alertmanager target to actually deliver these.
+groups:
+  - name: pqkms
+    rules:
+      - alert: PqkmsReplicaDown
+        expr: up{job="pqkms"} == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: "PQ-KMS replica down"
+          description: "A PQ-KMS replica ({{ $labels.instance }}) has been unscrapable for 1m."
+
+      - alert: PqkmsKeystoreLocked
+        expr: pqkms_unlocked == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: "PQ-KMS keystore locked"
+          description: "A replica reports its keystore is locked — it cannot serve crypto operations."
+
+      - alert: PqkmsHighErrorRate
+        # >5% 5xx over 5m on any route.
+        expr: |
+          sum(rate(pqkms_http_requests_total{status=~"5.."}[5m]))
+            / sum(rate(pqkms_http_requests_total[5m])) > 0.05
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "PQ-KMS elevated 5xx error rate"
+          description: "More than 5% of requests are returning 5xx over the last 5 minutes."
+
+      - alert: PqkmsHighLatencyP99
+        # p99 request latency above 1s over 5m.
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(pqkms_http_request_duration_seconds_bucket[5m])) by (le)) > 1
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "PQ-KMS high p99 latency"
+          description: "p99 request latency has exceeded 1s for 5 minutes."
+
+      - alert: PqkmsNonceBudgetRejections
+        # Any 409s on encrypt indicate keys hitting the AES-GCM nonce budget.
+        expr: sum(rate(pqkms_http_requests_total{route=~".*/encrypt", status="409"}[10m])) > 0
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "PQ-KMS keys hitting the nonce budget"
+          description: "Encrypt calls are being refused (409) — rotate the affected key(s)."

@@ -43,6 +43,7 @@ from .obs import (
     metrics_response,
     request_id_var,
     set_unlocked,
+    setup_tracing,
 )
 
 
@@ -202,7 +203,10 @@ def create_app() -> FastAPI:
         ks.unlock()
 
     audit_keypair = load_or_create_audit_signing_key(ks)
-    audit_sink = make_audit_sink(os.environ.get("PQKMS_AUDIT_LOG_FILE"))
+    audit_sink = make_audit_sink(
+        os.environ.get("PQKMS_AUDIT_LOG_FILE"),
+        os.environ.get("PQKMS_AUDIT_LOG_FORMAT", "json").strip().lower(),
+    )
     audit = AuditLog(repo, audit_keypair, sink=audit_sink)
 
     auth = TokenAuth(repo)
@@ -295,6 +299,9 @@ def create_app() -> FastAPI:
             content={"detail": "internal error", "request_id": rid},
         )
 
+    # Optional distributed tracing (no-op unless PQKMS_OTEL_ENABLED + deps present).
+    setup_tracing(app)
+
     app.include_router(build_router(ks, audit, auth, authz, limiter))
 
     # Admin UI
@@ -322,25 +329,36 @@ def create_app() -> FastAPI:
         set_unlocked(ks.is_unlocked())
         return metrics_response()
 
-    @app.get("/health")
-    def health():
-        """Liveness probe — used by docker healthcheck and operator
-        monitoring. Returns 200 if the KeyStore is unlocked (i.e. the
-        passphrase was accepted at boot) and the SQLite DB is reachable.
-        Intentionally unauthenticated — same posture as /; reveals only
-        the unlock + DB-reachable booleans, no secrets.
-        """
+    def _readiness() -> tuple[bool, dict]:
+        """Ready = unlocked AND database reachable. Used to gate traffic."""
         try:
             unlocked = ks.is_unlocked() if hasattr(ks, "is_unlocked") else True
         except Exception:
             unlocked = False
         db_ok = repo.ping()
         ok = unlocked and db_ok
-        return JSONResponse(
-            status_code=200 if ok else 503,
-            content={"status": "ok" if ok else "degraded",
-                     "unlocked": unlocked, "db": db_ok},
-        )
+        return ok, {"status": "ok" if ok else "degraded", "unlocked": unlocked, "db": db_ok}
+
+    @app.get("/livez")
+    def livez():
+        """Liveness: the process is up and serving. Always 200 if we got here —
+        a failing liveness probe should trigger a restart, not a traffic drain.
+        Use this for the container/orchestrator liveness check."""
+        return JSONResponse(status_code=200, content={"status": "alive"})
+
+    @app.get("/readyz")
+    def readyz():
+        """Readiness: safe to route traffic (KeyStore unlocked + DB reachable).
+        Use this for the orchestrator readiness gate and load-balancer health."""
+        ok, body = _readiness()
+        return JSONResponse(status_code=200 if ok else 503, content=body)
+
+    @app.get("/health")
+    def health():
+        """Back-compatible alias of /readyz (readiness semantics). Intentionally
+        unauthenticated — same posture as /; reveals only unlock + DB booleans."""
+        ok, body = _readiness()
+        return JSONResponse(status_code=200 if ok else 503, content=body)
 
     return app
 

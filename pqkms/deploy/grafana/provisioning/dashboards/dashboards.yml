@@ -1,0 +1,11 @@
+# Grafana dashboard provider: auto-loads JSON dashboards from this directory.
+apiVersion: 1
+providers:
+  - name: pqkms
+    orgId: 1
+    folder: PQ-KMS
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /etc/grafana/provisioning/dashboards

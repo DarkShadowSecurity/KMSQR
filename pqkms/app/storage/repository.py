@@ -173,11 +173,12 @@ class Repository:
         d["public_material"] = _b(d["public_material"])
         return d
 
-    def list_keys_current(self) -> list[dict]:
+    def list_keys_current(self, *, limit: int = 200, offset: int = 0) -> list[dict]:
         stmt = (
             select(*self._CURRENT_COLS)
             .select_from(self._current_join())
-            .order_by(managed_keys.c.created_at.desc())
+            .order_by(managed_keys.c.created_at.desc(), managed_keys.c.id.asc())
+            .limit(limit).offset(offset)
         )
         with self._engine.connect() as conn:
             rows = conn.execute(stmt).mappings().fetchall()
@@ -310,14 +311,17 @@ class Repository:
         with self._engine.begin() as conn:
             conn.execute(update(api_tokens).where(api_tokens.c.id == token_id).values(revoked=1))
 
-    def list_tokens(self) -> list[dict]:
+    def list_tokens(self, *, limit: int = 200, offset: int = 0) -> list[dict]:
         cols = (
             api_tokens.c.id, api_tokens.c.name, api_tokens.c.scopes,
             api_tokens.c.created_at, api_tokens.c.revoked, api_tokens.c.expires_at,
             api_tokens.c.principal_id,
         )
         with self._engine.connect() as conn:
-            rows = conn.execute(select(*cols).order_by(api_tokens.c.created_at.desc())).mappings().fetchall()
+            rows = conn.execute(
+                select(*cols).order_by(api_tokens.c.created_at.desc(), api_tokens.c.id.asc())
+                .limit(limit).offset(offset)
+            ).mappings().fetchall()
         return [dict(r) for r in rows]
 
     def find_active_tokens_by_id_prefix(self, prefix: str) -> list[dict]:
@@ -361,13 +365,16 @@ class Repository:
             row = conn.execute(select(*cols).where(principals.c.id == principal_id)).mappings().fetchone()
         return dict(row) if row else None
 
-    def list_principals(self) -> list[dict]:
+    def list_principals(self, *, limit: int = 200, offset: int = 0) -> list[dict]:
         cols = (
             principals.c.id, principals.c.ptype, principals.c.display_name,
             principals.c.created_at, principals.c.disabled,
         )
         with self._engine.connect() as conn:
-            rows = conn.execute(select(*cols).order_by(principals.c.created_at.desc())).mappings().fetchall()
+            rows = conn.execute(
+                select(*cols).order_by(principals.c.created_at.desc(), principals.c.id.asc())
+                .limit(limit).offset(offset)
+            ).mappings().fetchall()
         return [dict(r) for r in rows]
 
     def set_principal_disabled(self, principal_id: str, disabled: bool) -> bool:
@@ -461,9 +468,12 @@ class Repository:
             ).mappings().fetchall()
         return [dict(r) for r in rows]
 
-    def list_grants(self) -> list[dict]:
+    def list_grants(self, *, limit: int = 200, offset: int = 0) -> list[dict]:
         with self._engine.connect() as conn:
-            rows = conn.execute(select(*self._GRANT_COLS).order_by(grants.c.created_at.desc())).mappings().fetchall()
+            rows = conn.execute(
+                select(*self._GRANT_COLS).order_by(grants.c.created_at.desc(), grants.c.id.asc())
+                .limit(limit).offset(offset)
+            ).mappings().fetchall()
         return [dict(r) for r in rows]
 
     def delete_grant(self, grant_id: str) -> bool:

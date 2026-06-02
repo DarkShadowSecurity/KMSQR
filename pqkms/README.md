@@ -172,6 +172,18 @@ defenses enabled out of the box:
   on startup (a fresh DB is built from scratch; an existing one has only the new
   revisions applied; a pre-Alembic DB is stamped at its baseline first).
   Operators can also drive it from the CLI (`alembic current|history|upgrade`).
+- **Liveness vs readiness**: `/livez` (process alive — restart on failure) is
+  distinct from `/readyz` (unlocked + DB reachable — gate traffic). `/health`
+  remains a readiness alias. Wire `/livez` to the orchestrator liveness probe and
+  `/readyz` to the readiness gate / load-balancer.
+- **Paginated lists**: `GET /keys`, `/tokens`, `/principals`, `/grants` accept
+  `?limit=&offset=` (limit 1..1000, default 200; still a JSON array, newest
+  first) so listings stay bounded at scale.
+- **SIEM-ready audit export**: set `PQKMS_AUDIT_LOG_FORMAT=cef` to mirror audit
+  entries as ArcSight **CEF** lines (Splunk/QRadar/Sentinel-parseable) instead of
+  JSON. Ships Prometheus **alert rules** (`deploy/prometheus/alerts.yml`) and a
+  **Grafana dashboard** (auto-provisioned). Optional **OpenTelemetry** tracing
+  (`PQKMS_OTEL_ENABLED=1`, dependency-optional) exports spans to an OTLP collector.
 - **Observability**: a `/metrics` Prometheus endpoint (request counts + latency
   by route template, and a keystore-unlocked gauge), structured JSON logs
   (`PQKMS_LOG_FORMAT=json`), and an `X-Request-ID` on every response that is
@@ -231,7 +243,9 @@ Before trusting it with real secrets, also:
 | `PQKMS_MAX_BODY_BYTES`        | `16777216`  | Request body size cap (16 MiB).          |
 | `PQKMS_DATA_DIR`              | `/var/lib/pqkms` | SQLite + key-material location.     |
 | `PQKMS_DB_URL`               | (SQLite file) | SQLAlchemy database URL. Set to `postgresql+psycopg://…` for HA / multi-replica. |
-| `PQKMS_AUDIT_LOG_FILE`       | (unset)     | Path to an append-only file; every audit entry is also fsync'd here as JSONL for off-box WORM verification. |
+| `PQKMS_AUDIT_LOG_FILE`       | (unset)     | Path to an append-only file; every audit entry is also fsync'd here for off-box WORM verification. |
+| `PQKMS_AUDIT_LOG_FORMAT`     | `json`      | `json` (canonical JSONL) or `cef` (ArcSight CEF lines for SIEM ingestion). |
+| `PQKMS_OTEL_ENABLED`         | `0`         | `1` enables OpenTelemetry tracing (requires the optional opentelemetry packages; exports via `OTEL_EXPORTER_OTLP_*`). |
 | `PQKMS_REDIS_URL`            | (in-memory) | Shared rate-limit storage across replicas, e.g. `redis://redis:6379/0`. Fails open (local fallback) if Redis is unreachable. |
 | `PQKMS_LOG_FORMAT`           | `text`      | `json` emits one structured JSON log object per line (with `request_id`) for log shippers. |
 | `PQKMS_LOG_LEVEL`            | `INFO`      | Root log level.                          |
