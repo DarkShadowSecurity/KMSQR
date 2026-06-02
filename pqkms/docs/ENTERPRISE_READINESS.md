@@ -4,6 +4,10 @@ An honest status of enterprise capabilities: what is implemented and verified in
 this codebase, and what remains an organizational or external dependency that
 software alone cannot satisfy.
 
+> PQ-KMS is a product of and registered to **DarkShadowSec LLC**, © 2026, free
+> under the MIT License and provided **without warranty**. See
+> [LICENSING.md](LICENSING.md).
+
 ## Implemented & tested
 
 | Capability | Status | Where |

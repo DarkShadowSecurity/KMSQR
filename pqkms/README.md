@@ -4,6 +4,11 @@ A working Key Management System designed to resist both classical and quantum at
 Built with hybrid cryptography (classical + NIST PQC), envelope encryption, a versioned
 key hierarchy, hash-chained audit logs, and cryptographic agility baked in from day one.
 
+> **PQ-KMS is a product of DarkShadowSec LLC**, registered to DarkShadowSec LLC.
+> Copyright © 2026 DarkShadowSec LLC. Free and open-source under the **MIT License** —
+> free to use (including commercially), **provided "as is" with no warranties**.
+> See [LICENSE](LICENSE) and [docs/LICENSING.md](docs/LICENSING.md).
+
 ## Security design
 
 | Layer | Classical | Post-quantum | Combined |
@@ -282,15 +287,22 @@ or `PQKMS_PASSPHRASE_FILE`.
 - [docs/COMPLIANCE.md](docs/COMPLIANCE.md) — FIPS boundary statement + SOC2/ISO/PCI control mapping
 - [docs/DR.md](docs/DR.md) — backup/restore, RTO/RPO, continuity drills
 - [deploy/RUNBOOK.md](deploy/RUNBOOK.md) · [deploy/RELEASE.md](deploy/RELEASE.md) — operations & release/SBOM/signing
+- [docs/LICENSING.md](docs/LICENSING.md) — ownership (DarkShadowSec LLC), MIT license, no-warranty statement
 
-## License
+## License & ownership
 
-PQ-KMS is free and open-source software, released under the **MIT License**.
+**PQ-KMS is a product of, and is registered to, DarkShadowSec LLC.**
 
-> Copyright (c) 2026 DarkShadowSec LLC
+> Copyright © 2026 DarkShadowSec LLC
 
-You are free to use, copy, modify, and distribute it, including commercially,
-provided the copyright notice and the MIT permission notice are retained. The
-software is provided **"as is", without warranty of any kind** — see
-[`LICENSE`](LICENSE) for the full terms. Third-party dependencies remain
-governed by their own licenses, listed in [`NOTICES.md`](NOTICES.md).
+It is **free and open-source software**, released under the **MIT License**. You
+are free to use, copy, modify, and distribute it — **including commercially, at no
+charge** — provided the copyright notice and the MIT permission notice are
+retained. The software is provided **"as is", without warranty of any kind**, and
+DarkShadowSec LLC accepts **no liability** for its use; you operate it at your own
+risk.
+
+See [`LICENSE`](LICENSE) for the authoritative terms and
+[`docs/LICENSING.md`](docs/LICENSING.md) for the full ownership, license, and
+no-warranty statement. Third-party dependencies remain governed by their own
+licenses, listed in [`NOTICES.md`](NOTICES.md).
