@@ -135,20 +135,20 @@ def test_nonce_budget_resets_on_rotation(tmp_path):
 
 def test_token_without_ttl_does_not_expire(tmp_path):
     auth = TokenAuth(_repo(tmp_path))
-    _tid, tok = auth.create_token("perm", {SCOPES_READ})
+    _tid, tok, _pid = auth.create_token("perm", {SCOPES_READ})
     assert auth.verify(tok) == {SCOPES_READ}
 
 
 def test_token_with_future_ttl_verifies(tmp_path):
     auth = TokenAuth(_repo(tmp_path))
-    _tid, tok = auth.create_token("temp", {SCOPES_READ}, ttl_seconds=3600)
+    _tid, tok, _pid = auth.create_token("temp", {SCOPES_READ}, ttl_seconds=3600)
     assert auth.verify(tok) == {SCOPES_READ}
 
 
 def test_token_expired_rejected(tmp_path):
     repo = _repo(tmp_path)
     auth = TokenAuth(repo)
-    tid, tok = auth.create_token("temp", {SCOPES_READ}, ttl_seconds=3600)
+    tid, tok, _pid = auth.create_token("temp", {SCOPES_READ}, ttl_seconds=3600)
     # Force-expire without sleeping.
     past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
     with repo.engine.begin() as c:

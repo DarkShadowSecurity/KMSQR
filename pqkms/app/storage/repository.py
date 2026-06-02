@@ -18,12 +18,13 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-from sqlalchemy import insert, select, text, update
+from sqlalchemy import delete, insert, select, text, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
 from .engine import make_engine
-from .schema import api_tokens, audit_log, key_versions, kms_meta, managed_keys, metadata
+from .migrate import run_migrations
+from .schema import api_tokens, audit_log, key_versions, kms_meta, managed_keys, principals
 
 # Fixed key for the PostgreSQL advisory lock that serializes audit appends across
 # replicas. Arbitrary but stable 63-bit constant ("pqkms-audit" mod 2^63-ish).
@@ -37,39 +38,15 @@ def _b(v) -> Optional[bytes]:
 class Repository:
     def __init__(self, engine: Engine):
         self._engine = engine
-        metadata.create_all(engine)
-        self._migrate()
+        # Alembic owns the schema: bring the database to head (creating it from
+        # scratch on a fresh DB, or applying only the new revisions on an
+        # existing one). Replaces create_all + ad-hoc ALTERs.
+        run_migrations(engine)
 
     @property
     def engine(self) -> Engine:
         """Escape hatch for tooling/tests that need raw access. Not used by app code."""
         return self._engine
-
-    def _migrate(self) -> None:
-        """Additive, idempotent migrations for databases created by older builds.
-        create_all() never alters an existing table, so columns added after first
-        deploy are applied here."""
-        from sqlalchemy import inspect
-
-        insp = inspect(self._engine)
-        tables = set(insp.get_table_names())
-        stmts: list[str] = []
-        if "key_versions" in tables:
-            cols = {c["name"] for c in insp.get_columns("key_versions")}
-            if "usage_count" not in cols:
-                stmts.append("ALTER TABLE key_versions ADD COLUMN usage_count BIGINT NOT NULL DEFAULT 0")
-        if "api_tokens" in tables:
-            cols = {c["name"] for c in insp.get_columns("api_tokens")}
-            if "expires_at" not in cols:
-                stmts.append("ALTER TABLE api_tokens ADD COLUMN expires_at TEXT")
-        # Fork guard for the audit hash-chain: two entries can never claim the
-        # same predecessor. A UNIQUE INDEX (rather than a table constraint) is
-        # addable to pre-existing tables and works on both SQLite and Postgres.
-        stmts.append("CREATE UNIQUE INDEX IF NOT EXISTS uq_audit_prev_hash ON audit_log (prev_hash)")
-        if stmts:
-            with self._engine.begin() as conn:
-                for s in stmts:
-                    conn.execute(text(s))
 
     # ---------------------------------------------------------------- meta ----
 
@@ -293,16 +270,30 @@ class Repository:
         cols = (
             api_tokens.c.id, api_tokens.c.name, api_tokens.c.scopes,
             api_tokens.c.created_at, api_tokens.c.revoked, api_tokens.c.expires_at,
+            api_tokens.c.principal_id,
         )
         with self._engine.connect() as conn:
             rows = conn.execute(select(*cols).order_by(api_tokens.c.created_at.desc())).mappings().fetchall()
         return [dict(r) for r in rows]
 
     def find_active_tokens_by_id_prefix(self, prefix: str) -> list[dict]:
-        cols = (api_tokens.c.token_hash, api_tokens.c.scopes, api_tokens.c.expires_at)
+        # Left join the principal so verify() can attribute the call to a real
+        # identity without a second round-trip. A token's principal is disabled
+        # => the token is treated as inactive (filtered out below in auth).
+        j = api_tokens.outerjoin(principals, principals.c.id == api_tokens.c.principal_id)
+        cols = (
+            api_tokens.c.token_hash,
+            api_tokens.c.scopes,
+            api_tokens.c.expires_at,
+            api_tokens.c.principal_id,
+            principals.c.display_name,
+            principals.c.disabled.label("principal_disabled"),
+        )
         with self._engine.connect() as conn:
             rows = conn.execute(
-                select(*cols).where(api_tokens.c.revoked == 0, api_tokens.c.id.like(prefix + "%"))
+                select(*cols)
+                .select_from(j)
+                .where(api_tokens.c.revoked == 0, api_tokens.c.id.like(prefix + "%"))
             ).mappings().fetchall()
         out = []
         for row in rows:
@@ -310,6 +301,54 @@ class Repository:
             d["token_hash"] = _b(d["token_hash"])
             out.append(d)
         return out
+
+    # ---------------------------------------------------------- principals ----
+
+    def insert_principal(self, row: dict) -> None:
+        with self._engine.begin() as conn:
+            conn.execute(insert(principals).values(**row))
+
+    def get_principal(self, principal_id: str) -> Optional[dict]:
+        cols = (
+            principals.c.id, principals.c.ptype, principals.c.display_name,
+            principals.c.created_at, principals.c.disabled,
+        )
+        with self._engine.connect() as conn:
+            row = conn.execute(select(*cols).where(principals.c.id == principal_id)).mappings().fetchone()
+        return dict(row) if row else None
+
+    def list_principals(self) -> list[dict]:
+        cols = (
+            principals.c.id, principals.c.ptype, principals.c.display_name,
+            principals.c.created_at, principals.c.disabled,
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(select(*cols).order_by(principals.c.created_at.desc())).mappings().fetchall()
+        return [dict(r) for r in rows]
+
+    def set_principal_disabled(self, principal_id: str, disabled: bool) -> bool:
+        with self._engine.begin() as conn:
+            res = conn.execute(
+                update(principals).where(principals.c.id == principal_id).values(disabled=1 if disabled else 0)
+            )
+        return res.rowcount > 0
+
+    def delete_principal(self, principal_id: str) -> bool:
+        """Delete a principal and revoke (not delete) its tokens, so historical
+        audit entries that reference the token id still resolve. Returns False if
+        the principal does not exist. The two writes share one transaction so the
+        principal is never removed while its tokens remain usable."""
+        with self._engine.begin() as conn:
+            exists = conn.execute(
+                select(principals.c.id).where(principals.c.id == principal_id)
+            ).fetchone()
+            if not exists:
+                return False
+            conn.execute(
+                update(api_tokens).where(api_tokens.c.principal_id == principal_id).values(revoked=1)
+            )
+            conn.execute(delete(principals).where(principals.c.id == principal_id))
+        return True
 
     # --------------------------------------------------------------- admin ----
 

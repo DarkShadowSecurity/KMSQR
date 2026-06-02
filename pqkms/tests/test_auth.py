@@ -15,13 +15,13 @@ def auth(tmp_path):
 def test_token_roundtrip_verifies(auth):
     """The token returned to the caller must actually verify — guards against the
     create/verify hash-mismatch bug."""
-    _tid, tok = auth.create_token("service-a", {SCOPES_ADMIN})
+    _tid, tok, _pid = auth.create_token("service-a", {SCOPES_ADMIN})
     scopes = auth.verify(tok)
     assert scopes == {SCOPES_ADMIN}
 
 
 def test_token_scopes_preserved(auth):
-    _tid, tok = auth.create_token("reader", {SCOPES_READ})
+    _tid, tok, _pid = auth.create_token("reader", {SCOPES_READ})
     assert auth.verify(tok) == {SCOPES_READ}
 
 
@@ -32,7 +32,7 @@ def test_invalid_token_rejected(auth):
 
 
 def test_revoked_token_rejected(auth):
-    tid, tok = auth.create_token("temp", {SCOPES_READ})
+    tid, tok, _pid = auth.create_token("temp", {SCOPES_READ})
     assert auth.verify(tok) is not None
     auth.revoke(tid)
     assert auth.verify(tok) is None

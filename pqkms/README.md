@@ -85,6 +85,10 @@ All endpoints require `Authorization: Bearer <token>`.
 - `POST /api/v1/keys/{id}/wrap` — wrap a data key with hybrid KEM
 - `POST /api/v1/keys/{id}/unwrap` — unwrap
 - `GET  /api/v1/audit` — signed, hash-chained audit log
+- `POST /api/v1/principals` — create an identity (service or human) for attribution
+- `GET  /api/v1/principals` — list principals
+- `POST /api/v1/tokens` — mint a token; optionally bind it to an existing
+  `principal_id` (omit to auto-create a service principal named after the token)
 
 ## Files
 
@@ -129,6 +133,17 @@ defenses enabled out of the box:
   the key to get a fresh budget.
 - **Optional API-token expiry**: pass `ttl_seconds` when creating a token; expired
   tokens are rejected. Existing tokens remain non-expiring.
+- **Attributable identities & audit**: every API token is a credential *of* a
+  **principal** (a service or a human). Audit entries record the principal id as
+  the actor — actions are attributable to a real identity rather than an
+  anonymous scope set. A service may hold several tokens against one principal
+  (credential rotation); disabling or deleting a principal invalidates all of
+  its tokens at once. Manage via `POST/GET /api/v1/principals`.
+- **Versioned schema migrations**: the database schema is owned by **Alembic** —
+  every change ships as a numbered, reversible migration applied automatically
+  on startup (a fresh DB is built from scratch; an existing one has only the new
+  revisions applied; a pre-Alembic DB is stamped at its baseline first).
+  Operators can also drive it from the CLI (`alembic current|history|upgrade`).
 - **Observability**: a `/metrics` Prometheus endpoint (request counts + latency
   by route template, and a keystore-unlocked gauge), structured JSON logs
   (`PQKMS_LOG_FORMAT=json`), and an `X-Request-ID` on every response that is

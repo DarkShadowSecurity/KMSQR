@@ -80,6 +80,15 @@ class CreateTokenReq(BaseModel):
     scopes: list[str] = Field(..., min_length=1, max_length=16)
     # Optional expiry. Omit for a non-expiring token. Cap at ~10 years.
     ttl_seconds: Optional[int] = Field(None, ge=1, le=10 * 365 * 24 * 3600)
+    # Optionally bind the token to an existing principal (e.g. a second token for
+    # a service that rotates credentials). Omit to create a fresh service
+    # principal named after the token.
+    principal_id: Optional[str] = Field(None, max_length=64)
+
+
+class CreatePrincipalReq(BaseModel):
+    display_name: str = Field(..., min_length=1, max_length=128)
+    ptype: str = Field("service", pattern=r"^(service|human)$")
 
 
 def _safe_call(action: str, fn, *args, **kwargs):
@@ -104,13 +113,10 @@ def _safe_call(action: str, fn, *args, **kwargs):
 def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, limiter: Limiter) -> APIRouter:
     r = APIRouter(prefix="/api/v1")
 
-    def _actor(scopes: set[str]) -> str:
-        return f"token[{','.join(sorted(scopes))}]"
-
     # ---- health / status ----
     @r.get("/status")
     @limiter.limit("60/minute")
-    def status(request: Request, scopes=Depends(require_scope(auth, SCOPES_READ))):
+    def status(request: Request, caller=Depends(require_scope(auth, SCOPES_READ))):
         from ..crypto.kem import HybridKEM
         from ..crypto.signatures import HybridSigner
         return {
@@ -122,19 +128,19 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, limiter: Limite
     # ---- key lifecycle ----
     @r.post("/keys")
     @limiter.limit("30/minute")
-    def create_key(request: Request, req: CreateKeyReq, scopes=Depends(require_scope(auth, SCOPES_ADMIN))):
+    def create_key(request: Request, req: CreateKeyReq, caller=Depends(require_scope(auth, SCOPES_ADMIN))):
         mk = _safe_call("key.create", ks.create_key, req.name, req.key_type, req.description)
-        audit.append(_actor(scopes), "key.create", target=mk.id, detail={"name": mk.name, "type": mk.key_type})
+        audit.append(caller.actor, "key.create", target=mk.id, detail={"name": mk.name, "type": mk.key_type})
         return mk
 
     @r.get("/keys")
     @limiter.limit("120/minute")
-    def list_keys(request: Request, scopes=Depends(require_scope(auth, SCOPES_READ))):
+    def list_keys(request: Request, caller=Depends(require_scope(auth, SCOPES_READ))):
         return ks.list_keys()
 
     @r.get("/keys/{key_id}")
     @limiter.limit("120/minute")
-    def get_key(request: Request, key_id: str, scopes=Depends(require_scope(auth, SCOPES_READ))):
+    def get_key(request: Request, key_id: str, caller=Depends(require_scope(auth, SCOPES_READ))):
         mk = ks.get_key(key_id)
         if not mk:
             raise HTTPException(404, "not found")
@@ -142,7 +148,7 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, limiter: Limite
 
     @r.post("/keys/{key_id}/rotate")
     @limiter.limit("10/minute")
-    def rotate(request: Request, key_id: str, scopes=Depends(require_scope(auth, SCOPES_ADMIN))):
+    def rotate(request: Request, key_id: str, caller=Depends(require_scope(auth, SCOPES_ADMIN))):
         try:
             mk = ks.rotate(key_id)
         except KeyError:
@@ -150,13 +156,13 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, limiter: Limite
         except Exception:
             log.exception("key.rotate failed")  # request correlated via X-Request-ID
             raise HTTPException(500, "internal error")
-        audit.append(_actor(scopes), "key.rotate", target=key_id, detail={"new_version": mk.current_version})
+        audit.append(caller.actor, "key.rotate", target=key_id, detail={"new_version": mk.current_version})
         return mk
 
     # ---- AEAD encrypt/decrypt ----
     @r.post("/keys/{key_id}/encrypt")
     @limiter.limit("600/minute")
-    def encrypt(request: Request, key_id: str, req: EncryptReq, scopes=Depends(require_scope(auth, SCOPES_ENCRYPT))):
+    def encrypt(request: Request, key_id: str, req: EncryptReq, caller=Depends(require_scope(auth, SCOPES_ENCRYPT))):
         pt = _b64decode(req.plaintext_b64)
         aad = _b64decode_optional(req.aad_b64)
         try:
@@ -170,12 +176,12 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, limiter: Limite
         except Exception:
             log.exception("key.encrypt failed unexpectedly")  # request correlated via X-Request-ID
             raise HTTPException(500, "internal error")
-        audit.append(_actor(scopes), "key.encrypt", target=key_id, detail={"bytes": len(pt)})
+        audit.append(caller.actor, "key.encrypt", target=key_id, detail={"bytes": len(pt)})
         return out
 
     @r.post("/keys/{key_id}/decrypt")
     @limiter.limit("600/minute")
-    def decrypt(request: Request, key_id: str, req: DecryptReq, scopes=Depends(require_scope(auth, SCOPES_DECRYPT))):
+    def decrypt(request: Request, key_id: str, req: DecryptReq, caller=Depends(require_scope(auth, SCOPES_DECRYPT))):
         aad = _b64decode_optional(req.aad_b64)
         try:
             pt = ks.decrypt(key_id, req.ciphertext_b64, aad)
@@ -185,34 +191,34 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, limiter: Limite
         except Exception:
             log.exception("key.decrypt failed unexpectedly")  # request correlated via X-Request-ID
             raise HTTPException(500, "internal error")
-        audit.append(_actor(scopes), "key.decrypt", target=key_id, detail={"bytes": len(pt)})
+        audit.append(caller.actor, "key.decrypt", target=key_id, detail={"bytes": len(pt)})
         return {"plaintext_b64": base64.b64encode(pt).decode()}
 
     # ---- sign / verify ----
     @r.post("/keys/{key_id}/sign")
     @limiter.limit("600/minute")
-    def sign(request: Request, key_id: str, req: SignReq, scopes=Depends(require_scope(auth, SCOPES_SIGN))):
+    def sign(request: Request, key_id: str, req: SignReq, caller=Depends(require_scope(auth, SCOPES_SIGN))):
         out = _safe_call("key.sign", ks.sign, key_id, _b64decode(req.message_b64))
-        audit.append(_actor(scopes), "key.sign", target=key_id)
+        audit.append(caller.actor, "key.sign", target=key_id)
         return out
 
     @r.post("/keys/{key_id}/verify")
     @limiter.limit("600/minute")
-    def verify(request: Request, key_id: str, req: VerifyReq, scopes=Depends(require_scope(auth, SCOPES_VERIFY))):
+    def verify(request: Request, key_id: str, req: VerifyReq, caller=Depends(require_scope(auth, SCOPES_VERIFY))):
         ok = _safe_call("key.verify", ks.verify, key_id, _b64decode(req.message_b64), req.signature_b64, req.version)
         return {"valid": ok}
 
     # ---- KEM wrap / unwrap ----
     @r.post("/keys/{key_id}/wrap")
     @limiter.limit("600/minute")
-    def wrap(request: Request, key_id: str, req: WrapReq, scopes=Depends(require_scope(auth, SCOPES_ENCRYPT))):
+    def wrap(request: Request, key_id: str, req: WrapReq, caller=Depends(require_scope(auth, SCOPES_ENCRYPT))):
         out = _safe_call("key.wrap", ks.wrap_data_key, key_id, _b64decode(req.data_key_b64))
-        audit.append(_actor(scopes), "key.wrap", target=key_id)
+        audit.append(caller.actor, "key.wrap", target=key_id)
         return out
 
     @r.post("/keys/{key_id}/unwrap")
     @limiter.limit("600/minute")
-    def unwrap(request: Request, key_id: str, req: UnwrapReq, scopes=Depends(require_scope(auth, SCOPES_DECRYPT))):
+    def unwrap(request: Request, key_id: str, req: UnwrapReq, caller=Depends(require_scope(auth, SCOPES_DECRYPT))):
         try:
             dk = ks.unwrap_data_key(key_id, req.encapsulation_b64, req.wrapped_key_b64, req.version)
         except (ValueError, KeyError) as e:
@@ -221,48 +227,77 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, limiter: Limite
         except Exception:
             log.exception("key.unwrap failed unexpectedly")  # request correlated via X-Request-ID
             raise HTTPException(500, "internal error")
-        audit.append(_actor(scopes), "key.unwrap", target=key_id)
+        audit.append(caller.actor, "key.unwrap", target=key_id)
         return {"data_key_b64": base64.b64encode(dk).decode()}
 
     # ---- audit ----
     @r.get("/audit")
     @limiter.limit("60/minute")
-    def audit_list(request: Request, limit: int = 200, scopes=Depends(require_scope(auth, SCOPES_READ))):
+    def audit_list(request: Request, limit: int = 200, caller=Depends(require_scope(auth, SCOPES_READ))):
         if limit < 1 or limit > 1000:
             raise HTTPException(400, "limit out of range")
         return {"entries": audit.list(limit=limit)}
 
     @r.get("/audit/verify")
     @limiter.limit("10/minute")
-    def audit_verify(request: Request, scopes=Depends(require_scope(auth, SCOPES_ADMIN))):
+    def audit_verify(request: Request, caller=Depends(require_scope(auth, SCOPES_ADMIN))):
         ok, bad = audit.verify_chain()
         return {"valid": ok, "first_bad_seq": bad}
+
+    # ---- principals ----
+    @r.post("/principals")
+    @limiter.limit("10/minute")
+    def create_principal(request: Request, req: CreatePrincipalReq, caller=Depends(require_scope(auth, SCOPES_ADMIN))):
+        try:
+            pid = auth.create_principal(req.display_name, req.ptype)
+        except ValueError as e:
+            log.warning("principal.create rejected: %s", e)
+            raise HTTPException(400, "invalid principal")
+        audit.append(caller.actor, "principal.create", target=pid,
+                     detail={"display_name": req.display_name, "ptype": req.ptype})
+        return {"id": pid, "display_name": req.display_name, "ptype": req.ptype}
+
+    @r.get("/principals")
+    @limiter.limit("60/minute")
+    def list_principals(request: Request, caller=Depends(require_scope(auth, SCOPES_ADMIN))):
+        return auth.list_principals()
+
+    @r.delete("/principals/{principal_id}")
+    @limiter.limit("60/minute")
+    def delete_principal(request: Request, principal_id: str, caller=Depends(require_scope(auth, SCOPES_ADMIN))):
+        if not auth.delete_principal(principal_id):
+            raise HTTPException(404, "not found")
+        audit.append(caller.actor, "principal.delete", target=principal_id)
+        return {"deleted": True}
 
     # ---- tokens ----
     @r.post("/tokens")
     @limiter.limit("10/minute")
-    def create_token(request: Request, req: CreateTokenReq, scopes=Depends(require_scope(auth, SCOPES_ADMIN))):
+    def create_token(request: Request, req: CreateTokenReq, caller=Depends(require_scope(auth, SCOPES_ADMIN))):
         try:
-            tid, raw = auth.create_token(req.name, set(req.scopes), req.ttl_seconds)
+            tid, raw, pid = auth.create_token(req.name, set(req.scopes), req.ttl_seconds, req.principal_id)
         except ValueError as e:
             log.warning("token.create rejected: %s", e)
-            raise HTTPException(400, "invalid scope")
+            raise HTTPException(400, "invalid scope or principal")
         audit.append(
-            _actor(scopes), "token.create", target=tid,
-            detail={"scopes": req.scopes, "name": req.name, "ttl_seconds": req.ttl_seconds},
+            caller.actor, "token.create", target=tid,
+            detail={"scopes": req.scopes, "name": req.name, "ttl_seconds": req.ttl_seconds, "principal_id": pid},
         )
-        return {"id": tid, "token": raw, "warning": "this token is only shown once; store it securely"}
+        return {
+            "id": tid, "token": raw, "principal_id": pid,
+            "warning": "this token is only shown once; store it securely",
+        }
 
     @r.get("/tokens")
     @limiter.limit("60/minute")
-    def list_tokens(request: Request, scopes=Depends(require_scope(auth, SCOPES_ADMIN))):
+    def list_tokens(request: Request, caller=Depends(require_scope(auth, SCOPES_ADMIN))):
         return auth.list_tokens()
 
     @r.delete("/tokens/{token_id}")
     @limiter.limit("60/minute")
-    def revoke_token(request: Request, token_id: str, scopes=Depends(require_scope(auth, SCOPES_ADMIN))):
+    def revoke_token(request: Request, token_id: str, caller=Depends(require_scope(auth, SCOPES_ADMIN))):
         auth.revoke(token_id)
-        audit.append(_actor(scopes), "token.revoke", target=token_id)
+        audit.append(caller.actor, "token.revoke", target=token_id)
         return {"revoked": True}
 
     return r

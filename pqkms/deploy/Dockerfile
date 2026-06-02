@@ -49,6 +49,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app/ ./app/
+# alembic.ini lets operators drive migrations from the CLI inside the container
+# (e.g. `alembic current`). Startup migrations run programmatically and do not
+# depend on it. The migration scripts themselves live under app/storage/migrations.
+COPY alembic.ini ./alembic.ini
 COPY LICENSE ./LICENSE
 COPY NOTICES.md ./NOTICES.md
 

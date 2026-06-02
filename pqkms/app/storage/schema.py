@@ -26,6 +26,21 @@ from sqlalchemy import (
 
 metadata = MetaData()
 
+# A principal is a stable identity that performs actions: a machine/service or a
+# human operator. API tokens are credentials *of* a principal (a service may
+# rotate through several tokens over its lifetime). Auditing the principal id —
+# rather than an anonymous "token[scopes]" string — is what makes actions
+# attributable to a real actor, a baseline enterprise/compliance requirement.
+principals = Table(
+    "principals",
+    metadata,
+    Column("id", Text, primary_key=True),
+    Column("ptype", Text, nullable=False),  # 'service' | 'human'
+    Column("display_name", Text, nullable=False),
+    Column("created_at", Text, nullable=False),
+    Column("disabled", Integer, nullable=False, default=0),
+)
+
 kms_meta = Table(
     "kms_meta",
     metadata,
@@ -86,4 +101,10 @@ api_tokens = Table(
     Column("created_at", Text, nullable=False),
     Column("revoked", Integer, nullable=False, default=0),
     Column("expires_at", Text),  # ISO8601 UTC; NULL = non-expiring
+    # The principal this token authenticates as (principals.id). No DB-level FK:
+    # the column is added by an ALTER on existing api_tokens and integrity is
+    # maintained in the repository (see delete_principal). Nullable for rows
+    # created by builds predating principals; the migration backfills one
+    # principal per legacy token so attribution works retroactively.
+    Column("principal_id", Text),
 )
