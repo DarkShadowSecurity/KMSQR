@@ -75,7 +75,7 @@ def test_audit_chain_on_backend(repo):
 
 def test_tokens_and_nonce_budget_on_backend(repo):
     auth = TokenAuth(repo)
-    _tid, tok = auth.create_token(f"reader-{uuid.uuid4().hex[:8]}", {SCOPES_READ}, ttl_seconds=3600)
+    _tid, tok, _pid = auth.create_token(f"reader-{uuid.uuid4().hex[:8]}", {SCOPES_READ}, ttl_seconds=3600)
     assert auth.verify(tok) == {SCOPES_READ}
 
     ks = KeyStore(

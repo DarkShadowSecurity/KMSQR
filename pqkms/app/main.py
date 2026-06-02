@@ -210,7 +210,7 @@ def create_app() -> FastAPI:
     # single-shot across replicas: only the winner creates and prints the token,
     # so it isn't minted (or logged) once per replica on a cold HA start.
     if not auth.has_any_token() and repo.put_meta("bootstrap_admin_issued_v1", b"1", if_absent=True):
-        tid, raw = auth.create_token(name="bootstrap-admin", scopes={SCOPES_ADMIN})
+        tid, raw, _pid = auth.create_token(name="bootstrap-admin", scopes={SCOPES_ADMIN})
         log.warning("=" * 72)
         log.warning("BOOTSTRAP ADMIN TOKEN (only shown once, save it now):")
         log.warning("  %s", raw)

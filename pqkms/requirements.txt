@@ -13,6 +13,10 @@ slowapi==0.1.9
 # PQKMS_DB_URL for HA). The PostgreSQL driver (psycopg) is an optional extra
 # installed only when targeting Postgres (see requirements-ha.txt).
 SQLAlchemy==2.0.50
+# Alembic owns the database schema: every change ships as a versioned, reversible
+# migration applied automatically on startup (and runnable via the `alembic` CLI
+# for operators). Replaces ad-hoc create_all/ALTER so upgrades are auditable.
+alembic==1.18.4
 # Prometheus metrics exposition for /metrics.
 prometheus-client==0.25.0
 # liboqs-python: post-quantum primitives. Version must match the C liboqs
