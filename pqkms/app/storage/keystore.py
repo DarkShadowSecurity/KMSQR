@@ -46,6 +46,7 @@ class ManagedKey:
     description: Optional[str]
     suite: int
     public_material: Optional[str]  # base64, or None for symmetric
+    namespace_id: Optional[str] = None
 
 
 class KeyStore:
@@ -177,12 +178,17 @@ class KeyStore:
         name: str,
         key_type: str,
         description: Optional[str] = None,
+        namespace_id: Optional[str] = None,
     ) -> ManagedKey:
         """
         Create a new managed key. Types:
             'aead'  — AES-256-GCM symmetric key
             'kem'   — hybrid X25519+ML-KEM-768 keypair for wrapping
             'sig'   — hybrid Ed25519+ML-DSA-65 signing keypair
+
+        namespace_id places the key in a key-ring (tenant). Callers resolve it
+        from a namespace name; the API layer defaults it to the 'default'
+        namespace.
         """
         self._require_unlocked()
         key_id = str(uuid.uuid4())
@@ -195,6 +201,7 @@ class KeyStore:
             mk={
                 "id": key_id, "name": name, "key_type": key_type,
                 "current_version": 1, "created_at": created_at, "description": description,
+                "namespace_id": namespace_id,
             },
             kv={
                 "key_id": key_id, "version": 1, "suite": int(suite),
@@ -207,6 +214,7 @@ class KeyStore:
             id=key_id, name=name, key_type=key_type, current_version=1,
             created_at=created_at, description=description, suite=int(suite),
             public_material=base64.b64encode(public).decode() if public else None,
+            namespace_id=namespace_id,
         )
 
     def _generate_material(self, key_type: str):
@@ -227,6 +235,7 @@ class KeyStore:
             current_version=r["current_version"], created_at=r["created_at"],
             description=r["description"], suite=r["suite"],
             public_material=base64.b64encode(r["public_material"]).decode() if r["public_material"] else None,
+            namespace_id=r.get("namespace_id"),
         )
 
     def list_keys(self) -> list[ManagedKey]:

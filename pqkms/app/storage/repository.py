@@ -24,7 +24,16 @@ from sqlalchemy.exc import IntegrityError
 
 from .engine import make_engine
 from .migrate import run_migrations
-from .schema import api_tokens, audit_log, key_versions, kms_meta, managed_keys, principals
+from .schema import (
+    api_tokens,
+    audit_log,
+    grants,
+    key_versions,
+    kms_meta,
+    managed_keys,
+    namespaces,
+    principals,
+)
 
 # Fixed key for the PostgreSQL advisory lock that serializes audit appends across
 # replicas. Arbitrary but stable 63-bit constant ("pqkms-audit" mod 2^63-ish).
@@ -108,6 +117,7 @@ class Repository:
         managed_keys.c.current_version,
         managed_keys.c.created_at,
         managed_keys.c.description,
+        managed_keys.c.namespace_id,
         key_versions.c.suite,
         key_versions.c.public_material,
     )
@@ -349,6 +359,83 @@ class Repository:
             )
             conn.execute(delete(principals).where(principals.c.id == principal_id))
         return True
+
+    # --------------------------------------------------------- namespaces ----
+
+    def insert_namespace(self, row: dict) -> None:
+        with self._engine.begin() as conn:
+            conn.execute(insert(namespaces).values(**row))
+
+    _NS_COLS = (namespaces.c.id, namespaces.c.name, namespaces.c.created_at, namespaces.c.description)
+
+    def get_namespace_by_id(self, namespace_id: str) -> Optional[dict]:
+        with self._engine.connect() as conn:
+            row = conn.execute(select(*self._NS_COLS).where(namespaces.c.id == namespace_id)).mappings().fetchone()
+        return dict(row) if row else None
+
+    def get_namespace_by_name(self, name: str) -> Optional[dict]:
+        with self._engine.connect() as conn:
+            row = conn.execute(select(*self._NS_COLS).where(namespaces.c.name == name)).mappings().fetchone()
+        return dict(row) if row else None
+
+    def list_namespaces(self) -> list[dict]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(select(*self._NS_COLS).order_by(namespaces.c.created_at.asc())).mappings().fetchall()
+        return [dict(r) for r in rows]
+
+    def get_key_namespace(self, key_id: str) -> Optional[str]:
+        """Return the namespace_id of a key, or None if the key does not exist."""
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                select(managed_keys.c.namespace_id).where(managed_keys.c.id == key_id)
+            ).fetchone()
+        return row[0] if row else None
+
+    # ------------------------------------------------------------- grants ----
+
+    _GRANT_COLS = (
+        grants.c.id, grants.c.principal_id, grants.c.resource_type,
+        grants.c.resource_id, grants.c.operations, grants.c.created_at, grants.c.created_by,
+    )
+
+    def upsert_grant(self, row: dict) -> str:
+        """Insert a grant, or replace the operations of the existing grant for the
+        same (principal, resource_type, resource_id). Returns the grant id that is
+        now authoritative for that triple."""
+        with self._engine.begin() as conn:
+            existing = conn.execute(
+                select(grants.c.id).where(
+                    grants.c.principal_id == row["principal_id"],
+                    grants.c.resource_type == row["resource_type"],
+                    grants.c.resource_id == row["resource_id"],
+                )
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    update(grants).where(grants.c.id == existing[0]).values(
+                        operations=row["operations"], created_at=row["created_at"], created_by=row.get("created_by"),
+                    )
+                )
+                return existing[0]
+            conn.execute(insert(grants).values(**row))
+            return row["id"]
+
+    def get_grants_for_principal(self, principal_id: str) -> list[dict]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                select(*self._GRANT_COLS).where(grants.c.principal_id == principal_id)
+            ).mappings().fetchall()
+        return [dict(r) for r in rows]
+
+    def list_grants(self) -> list[dict]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(select(*self._GRANT_COLS).order_by(grants.c.created_at.desc())).mappings().fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_grant(self, grant_id: str) -> bool:
+        with self._engine.begin() as conn:
+            res = conn.execute(delete(grants).where(grants.c.id == grant_id))
+        return res.rowcount > 0
 
     # --------------------------------------------------------------- admin ----
 
