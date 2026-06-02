@@ -92,6 +92,11 @@ managed_keys = Table(
     # backfilled to the 'default' namespace; new keys always set it. No DB-level
     # FK (cross-dialect ALTER simplicity); integrity is maintained in code.
     Column("namespace_id", Text),
+    # Lifecycle state: 'enabled' (usable), 'disabled' (exists but refuses crypto
+    # ops), 'pending_deletion' (scheduled for destruction at deletion_at).
+    Column("state", Text, nullable=False, default="enabled"),
+    Column("deletion_at", Text),  # ISO8601 UTC; set while pending_deletion
+    Column("origin", Text, nullable=False, default="generated"),  # 'generated' | 'imported'
 )
 
 key_versions = Table(

@@ -98,6 +98,37 @@ class Repository:
             conn.execute(insert(managed_keys).values(**mk))
             conn.execute(insert(key_versions).values(**kv))
 
+    def set_key_state(self, key_id: str, state: str, deletion_at: Optional[str] = None) -> bool:
+        """Update a key's lifecycle state (and its deletion_at). Returns False if
+        the key does not exist."""
+        with self._engine.begin() as conn:
+            res = conn.execute(
+                update(managed_keys).where(managed_keys.c.id == key_id).values(state=state, deletion_at=deletion_at)
+            )
+        return res.rowcount > 0
+
+    def get_key_state(self, key_id: str) -> Optional[dict]:
+        """Return {state, deletion_at} for a key, or None if it does not exist."""
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                select(managed_keys.c.state, managed_keys.c.deletion_at).where(managed_keys.c.id == key_id)
+            ).mappings().fetchone()
+        return dict(row) if row else None
+
+    def destroy_key(self, key_id: str) -> bool:
+        """Permanently delete a key: its grants, all versions (FK cascade), and
+        the key row, in one transaction. Returns False if the key does not exist."""
+        with self._engine.begin() as conn:
+            exists = conn.execute(select(managed_keys.c.id).where(managed_keys.c.id == key_id)).fetchone()
+            if not exists:
+                return False
+            conn.execute(
+                delete(grants).where(grants.c.resource_type == "key", grants.c.resource_id == key_id)
+            )
+            conn.execute(delete(key_versions).where(key_versions.c.key_id == key_id))
+            conn.execute(delete(managed_keys).where(managed_keys.c.id == key_id))
+        return True
+
     def rotate_key(self, key_id: str, old_version: int, kv: dict, new_version: int) -> None:
         with self._engine.begin() as conn:
             conn.execute(
@@ -118,6 +149,9 @@ class Repository:
         managed_keys.c.created_at,
         managed_keys.c.description,
         managed_keys.c.namespace_id,
+        managed_keys.c.state,
+        managed_keys.c.deletion_at,
+        managed_keys.c.origin,
         key_versions.c.suite,
         key_versions.c.public_material,
     )
