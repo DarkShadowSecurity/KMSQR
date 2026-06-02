@@ -33,6 +33,7 @@ from .storage.audit import AuditLog, load_or_create_audit_signing_key
 from .storage.audit_sink import make_audit_sink
 from .custody import make_custodian
 from .api.auth import TokenAuth, SCOPES_ADMIN
+from .api.authz import Authorizer, resolve_mode
 from .api.routes import build_router
 from .crypto.kem import HybridKEM
 from .crypto.signatures import HybridSigner
@@ -205,6 +206,9 @@ def create_app() -> FastAPI:
     audit = AuditLog(repo, audit_keypair, sink=audit_sink)
 
     auth = TokenAuth(repo)
+    authz_mode = resolve_mode()
+    authz = Authorizer(repo, authz_mode)
+    log.info("authorization mode: %s", authz_mode)
 
     # Bootstrap admin token if none exists. The if_absent sentinel makes this
     # single-shot across replicas: only the winner creates and prints the token,
@@ -291,7 +295,7 @@ def create_app() -> FastAPI:
             content={"detail": "internal error", "request_id": rid},
         )
 
-    app.include_router(build_router(ks, audit, auth, limiter))
+    app.include_router(build_router(ks, audit, auth, authz, limiter))
 
     # Admin UI
     ui_dir = Path(__file__).parent / "ui"

@@ -89,6 +89,11 @@ All endpoints require `Authorization: Bearer <token>`.
 - `GET  /api/v1/principals` — list principals
 - `POST /api/v1/tokens` — mint a token; optionally bind it to an existing
   `principal_id` (omit to auto-create a service principal named after the token)
+- `POST /api/v1/namespaces` — create a key-ring (tenant); `GET` to list
+- `POST /api/v1/keys` accepts an optional `namespace` (name) — defaults to `default`
+- `POST /api/v1/grants` — grant a principal operations on a key or namespace
+  (`{principal_id, resource_type: key|namespace, resource_id, operations:[…]}`);
+  `GET /api/v1/grants[?principal_id=…]` to list, `DELETE /api/v1/grants/{id}` to revoke
 
 ## Files
 
@@ -139,6 +144,16 @@ defenses enabled out of the box:
   anonymous scope set. A service may hold several tokens against one principal
   (credential rotation); disabling or deleting a principal invalidates all of
   its tokens at once. Manage via `POST/GET /api/v1/principals`.
+- **Namespaces & per-resource authorization**: keys live in **namespaces**
+  (key-rings) for tenant isolation, and **grants** bind a principal to a set of
+  operations on a specific key or a whole namespace. Two authorization modes
+  (`PQKMS_AUTHZ_MODE`): `legacy` (default — a scope authorizes any key, the
+  historical behaviour, so upgrades are non-breaking) and `strict` (a non-admin
+  principal must additionally hold a grant covering the operation and the target
+  key/namespace; key listings are filtered to what the caller may read). The
+  `admin` scope is a global superuser in both modes. A new `manage` scope lets a
+  principal administer keys in granted namespaces without global admin. **Enable
+  `strict` for an enterprise least-privilege posture.**
 - **Versioned schema migrations**: the database schema is owned by **Alembic** —
   every change ships as a numbered, reversible migration applied automatically
   on startup (a fresh DB is built from scratch; an existing one has only the new
@@ -198,6 +213,7 @@ Before trusting it with real secrets, also:
 | `PQKMS_PASSPHRASE_FILE`       | (unset)     | Path to a secret file holding the passphrase; takes precedence over `PQKMS_PASSPHRASE`. |
 | `PQKMS_MIN_PASSPHRASE_LEN`    | `16`        | Reject shorter passphrases at startup.   |
 | `PQKMS_REQUIRE_PQ`           | `1`         | Refuse to start without liboqs (post-quantum). Set `0` to allow classical-only. |
+| `PQKMS_AUTHZ_MODE`           | `legacy`    | `legacy` = scope authorizes any key (historical). `strict` = non-admins also need a grant on the key/namespace. |
 | `PQKMS_CUSTODY_BACKEND`      | `passphrase`| Root-KEK custody backend: `passphrase`, `shamir`, `awskms`, `gcpkms`, or `pkcs11`. |
 | `PQKMS_MAX_BODY_BYTES`        | `16777216`  | Request body size cap (16 MiB).          |
 | `PQKMS_DATA_DIR`              | `/var/lib/pqkms` | SQLite + key-material location.     |

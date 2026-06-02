@@ -21,8 +21,15 @@ SCOPES_DECRYPT = "decrypt"
 SCOPES_SIGN = "sign"
 SCOPES_VERIFY = "verify"
 SCOPES_READ = "read"
+# Key-lifecycle capability (create/rotate). Previously these required the admin
+# scope; `manage` lets a non-admin principal administer keys in namespaces it is
+# granted, without global superuser rights. Admin still implies manage.
+SCOPES_MANAGE = "manage"
 
-ALL_SCOPES = {SCOPES_ADMIN, SCOPES_ENCRYPT, SCOPES_DECRYPT, SCOPES_SIGN, SCOPES_VERIFY, SCOPES_READ}
+ALL_SCOPES = {
+    SCOPES_ADMIN, SCOPES_ENCRYPT, SCOPES_DECRYPT,
+    SCOPES_SIGN, SCOPES_VERIFY, SCOPES_READ, SCOPES_MANAGE,
+}
 
 PRINCIPAL_TYPES = {"service", "human"}
 

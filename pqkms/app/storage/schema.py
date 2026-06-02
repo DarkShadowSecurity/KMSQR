@@ -48,6 +48,37 @@ kms_meta = Table(
     Column("v", LargeBinary, nullable=False),
 )
 
+# A namespace (key-ring) is the unit of tenant isolation: every managed key
+# belongs to exactly one. Grants can be scoped to a whole namespace, so a team
+# can be given access to all keys in their namespace without per-key grants. A
+# "default" namespace is created by the migration and holds pre-existing keys.
+namespaces = Table(
+    "namespaces",
+    metadata,
+    Column("id", Text, primary_key=True),
+    Column("name", Text, nullable=False, unique=True),
+    Column("created_at", Text, nullable=False),
+    Column("description", Text),
+)
+
+# A grant authorizes a principal to perform a set of operations on a resource
+# (a single key, or a whole namespace). In strict authorization mode a non-admin
+# principal must hold a grant covering both the operation and the target key (or
+# its namespace). Operations are a csv subset of ALL_OPS in app/api/authz.py.
+grants = Table(
+    "grants",
+    metadata,
+    Column("id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),  # principals.id (app-enforced FK)
+    Column("resource_type", Text, nullable=False),  # 'key' | 'namespace'
+    Column("resource_id", Text, nullable=False),     # managed_keys.id | namespaces.id
+    Column("operations", Text, nullable=False),       # csv of operations
+    Column("created_at", Text, nullable=False),
+    Column("created_by", Text),                        # granting principal id
+    UniqueConstraint("principal_id", "resource_type", "resource_id", name="uq_grants_principal_resource"),
+    Index("idx_grants_principal", "principal_id"),
+)
+
 managed_keys = Table(
     "managed_keys",
     metadata,
@@ -57,6 +88,10 @@ managed_keys = Table(
     Column("current_version", Integer, nullable=False, default=1),
     Column("created_at", Text, nullable=False),
     Column("description", Text),
+    # Owning namespace (namespaces.id). Added by ALTER on existing tables and
+    # backfilled to the 'default' namespace; new keys always set it. No DB-level
+    # FK (cross-dialect ALTER simplicity); integrity is maintained in code.
+    Column("namespace_id", Text),
 )
 
 key_versions = Table(

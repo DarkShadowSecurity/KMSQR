@@ -21,6 +21,17 @@ from .auth import (
     SCOPES_SIGN,
     SCOPES_VERIFY,
     SCOPES_READ,
+    SCOPES_MANAGE,
+)
+from .authz import (
+    Authorizer,
+    parse_operations,
+    OP_ENCRYPT,
+    OP_DECRYPT,
+    OP_SIGN,
+    OP_VERIFY,
+    OP_READ,
+    OP_MANAGE,
 )
 
 
@@ -43,6 +54,8 @@ class CreateKeyReq(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     key_type: str = Field(..., pattern=r"^(aead|kem|sig)$")
     description: Optional[str] = Field(None, max_length=512)
+    # Namespace (key-ring) name to create the key in. Defaults to "default".
+    namespace: Optional[str] = Field(None, max_length=128)
 
 
 class EncryptReq(BaseModel):
@@ -91,6 +104,18 @@ class CreatePrincipalReq(BaseModel):
     ptype: str = Field("service", pattern=r"^(service|human)$")
 
 
+class CreateNamespaceReq(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._-]+$")
+    description: Optional[str] = Field(None, max_length=512)
+
+
+class CreateGrantReq(BaseModel):
+    principal_id: str = Field(..., max_length=64)
+    resource_type: str = Field(..., pattern=r"^(key|namespace)$")
+    resource_id: str = Field(..., max_length=64)
+    operations: list[str] = Field(..., min_length=1, max_length=8)
+
+
 def _safe_call(action: str, fn, *args, **kwargs):
     """Run fn(*args, **kwargs); on failure, log the exception with full context and
     raise an HTTPException with a generic, caller-safe message. Internal exception
@@ -110,8 +135,14 @@ def _safe_call(action: str, fn, *args, **kwargs):
         raise HTTPException(500, "internal error")
 
 
-def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, limiter: Limiter) -> APIRouter:
+def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, authz: Authorizer, limiter: Limiter) -> APIRouter:
     r = APIRouter(prefix="/api/v1")
+
+    def _namespace_id_for(name: Optional[str]) -> str:
+        ns = ks.repo.get_namespace_by_name(name or "default")
+        if ns is None:
+            raise HTTPException(400, "unknown namespace")
+        return ns["id"]
 
     # ---- health / status ----
     @r.get("/status")
@@ -128,19 +159,25 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, limiter: Limite
     # ---- key lifecycle ----
     @r.post("/keys")
     @limiter.limit("30/minute")
-    def create_key(request: Request, req: CreateKeyReq, caller=Depends(require_scope(auth, SCOPES_ADMIN))):
-        mk = _safe_call("key.create", ks.create_key, req.name, req.key_type, req.description)
-        audit.append(caller.actor, "key.create", target=mk.id, detail={"name": mk.name, "type": mk.key_type})
+    def create_key(request: Request, req: CreateKeyReq, caller=Depends(require_scope(auth, SCOPES_MANAGE))):
+        namespace_id = _namespace_id_for(req.namespace)
+        authz.authorize_namespace_op(caller, OP_MANAGE, namespace_id)
+        mk = _safe_call("key.create", ks.create_key, req.name, req.key_type, req.description, namespace_id)
+        audit.append(caller.actor, "key.create", target=mk.id,
+                     detail={"name": mk.name, "type": mk.key_type, "namespace_id": namespace_id})
         return mk
 
     @r.get("/keys")
     @limiter.limit("120/minute")
     def list_keys(request: Request, caller=Depends(require_scope(auth, SCOPES_READ))):
-        return ks.list_keys()
+        return authz.filter_visible_keys(caller, ks.list_keys())
 
     @r.get("/keys/{key_id}")
     @limiter.limit("120/minute")
     def get_key(request: Request, key_id: str, caller=Depends(require_scope(auth, SCOPES_READ))):
+        # Authorize before fetching so an unauthorized caller can't distinguish a
+        # forbidden key from a missing one (both 403 in strict mode).
+        authz.authorize_key_op(caller, OP_READ, key_id)
         mk = ks.get_key(key_id)
         if not mk:
             raise HTTPException(404, "not found")
@@ -148,7 +185,8 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, limiter: Limite
 
     @r.post("/keys/{key_id}/rotate")
     @limiter.limit("10/minute")
-    def rotate(request: Request, key_id: str, caller=Depends(require_scope(auth, SCOPES_ADMIN))):
+    def rotate(request: Request, key_id: str, caller=Depends(require_scope(auth, SCOPES_MANAGE))):
+        authz.authorize_key_op(caller, OP_MANAGE, key_id)
         try:
             mk = ks.rotate(key_id)
         except KeyError:
@@ -163,6 +201,7 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, limiter: Limite
     @r.post("/keys/{key_id}/encrypt")
     @limiter.limit("600/minute")
     def encrypt(request: Request, key_id: str, req: EncryptReq, caller=Depends(require_scope(auth, SCOPES_ENCRYPT))):
+        authz.authorize_key_op(caller, OP_ENCRYPT, key_id)
         pt = _b64decode(req.plaintext_b64)
         aad = _b64decode_optional(req.aad_b64)
         try:
@@ -182,6 +221,7 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, limiter: Limite
     @r.post("/keys/{key_id}/decrypt")
     @limiter.limit("600/minute")
     def decrypt(request: Request, key_id: str, req: DecryptReq, caller=Depends(require_scope(auth, SCOPES_DECRYPT))):
+        authz.authorize_key_op(caller, OP_DECRYPT, key_id)
         aad = _b64decode_optional(req.aad_b64)
         try:
             pt = ks.decrypt(key_id, req.ciphertext_b64, aad)
@@ -198,6 +238,7 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, limiter: Limite
     @r.post("/keys/{key_id}/sign")
     @limiter.limit("600/minute")
     def sign(request: Request, key_id: str, req: SignReq, caller=Depends(require_scope(auth, SCOPES_SIGN))):
+        authz.authorize_key_op(caller, OP_SIGN, key_id)
         out = _safe_call("key.sign", ks.sign, key_id, _b64decode(req.message_b64))
         audit.append(caller.actor, "key.sign", target=key_id)
         return out
@@ -205,6 +246,7 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, limiter: Limite
     @r.post("/keys/{key_id}/verify")
     @limiter.limit("600/minute")
     def verify(request: Request, key_id: str, req: VerifyReq, caller=Depends(require_scope(auth, SCOPES_VERIFY))):
+        authz.authorize_key_op(caller, OP_VERIFY, key_id)
         ok = _safe_call("key.verify", ks.verify, key_id, _b64decode(req.message_b64), req.signature_b64, req.version)
         return {"valid": ok}
 
@@ -212,6 +254,7 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, limiter: Limite
     @r.post("/keys/{key_id}/wrap")
     @limiter.limit("600/minute")
     def wrap(request: Request, key_id: str, req: WrapReq, caller=Depends(require_scope(auth, SCOPES_ENCRYPT))):
+        authz.authorize_key_op(caller, OP_ENCRYPT, key_id)
         out = _safe_call("key.wrap", ks.wrap_data_key, key_id, _b64decode(req.data_key_b64))
         audit.append(caller.actor, "key.wrap", target=key_id)
         return out
@@ -219,6 +262,7 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, limiter: Limite
     @r.post("/keys/{key_id}/unwrap")
     @limiter.limit("600/minute")
     def unwrap(request: Request, key_id: str, req: UnwrapReq, caller=Depends(require_scope(auth, SCOPES_DECRYPT))):
+        authz.authorize_key_op(caller, OP_DECRYPT, key_id)
         try:
             dk = ks.unwrap_data_key(key_id, req.encapsulation_b64, req.wrapped_key_b64, req.version)
         except (ValueError, KeyError) as e:
@@ -243,6 +287,74 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, limiter: Limite
     def audit_verify(request: Request, caller=Depends(require_scope(auth, SCOPES_ADMIN))):
         ok, bad = audit.verify_chain()
         return {"valid": ok, "first_bad_seq": bad}
+
+    # ---- namespaces ----
+    @r.post("/namespaces")
+    @limiter.limit("10/minute")
+    def create_namespace(request: Request, req: CreateNamespaceReq, caller=Depends(require_scope(auth, SCOPES_ADMIN))):
+        import uuid as _uuid
+        from datetime import datetime as _dt, timezone as _tz
+        if ks.repo.get_namespace_by_name(req.name) is not None:
+            raise HTTPException(409, "namespace already exists")
+        nid = str(_uuid.uuid4())
+        ks.repo.insert_namespace({
+            "id": nid, "name": req.name,
+            "created_at": _dt.now(_tz.utc).isoformat(), "description": req.description,
+        })
+        audit.append(caller.actor, "namespace.create", target=nid, detail={"name": req.name})
+        return {"id": nid, "name": req.name, "description": req.description}
+
+    @r.get("/namespaces")
+    @limiter.limit("60/minute")
+    def list_namespaces(request: Request, caller=Depends(require_scope(auth, SCOPES_READ))):
+        return ks.repo.list_namespaces()
+
+    # ---- grants ----
+    @r.post("/grants")
+    @limiter.limit("30/minute")
+    def create_grant(request: Request, req: CreateGrantReq, caller=Depends(require_scope(auth, SCOPES_ADMIN))):
+        import uuid as _uuid
+        from datetime import datetime as _dt, timezone as _tz
+        try:
+            ops = parse_operations(req.operations)
+        except ValueError as e:
+            log.warning("grant.create rejected: %s", e)
+            raise HTTPException(400, "invalid operations")
+        # Validate the principal and resource exist, so grants never dangle.
+        if auth.get_principal(req.principal_id) is None:
+            raise HTTPException(400, "unknown principal")
+        if req.resource_type == "namespace":
+            if ks.repo.get_namespace_by_id(req.resource_id) is None:
+                raise HTTPException(400, "unknown namespace")
+        elif ks.repo.get_key_namespace(req.resource_id) is None:
+            raise HTTPException(400, "unknown key")
+        gid = str(_uuid.uuid4())
+        authoritative = ks.repo.upsert_grant({
+            "id": gid, "principal_id": req.principal_id, "resource_type": req.resource_type,
+            "resource_id": req.resource_id, "operations": ",".join(sorted(ops)),
+            "created_at": _dt.now(_tz.utc).isoformat(), "created_by": caller.principal_id,
+        })
+        audit.append(caller.actor, "grant.create", target=authoritative, detail={
+            "principal_id": req.principal_id, "resource_type": req.resource_type,
+            "resource_id": req.resource_id, "operations": sorted(ops),
+        })
+        return {"id": authoritative, "principal_id": req.principal_id, "resource_type": req.resource_type,
+                "resource_id": req.resource_id, "operations": sorted(ops)}
+
+    @r.get("/grants")
+    @limiter.limit("60/minute")
+    def list_grants(request: Request, principal_id: Optional[str] = None,
+                    caller=Depends(require_scope(auth, SCOPES_ADMIN))):
+        rows = ks.repo.get_grants_for_principal(principal_id) if principal_id else ks.repo.list_grants()
+        return [{**g, "operations": sorted(o for o in g["operations"].split(",") if o)} for g in rows]
+
+    @r.delete("/grants/{grant_id}")
+    @limiter.limit("60/minute")
+    def delete_grant(request: Request, grant_id: str, caller=Depends(require_scope(auth, SCOPES_ADMIN))):
+        if not ks.repo.delete_grant(grant_id):
+            raise HTTPException(404, "not found")
+        audit.append(caller.actor, "grant.delete", target=grant_id)
+        return {"deleted": True}
 
     # ---- principals ----
     @r.post("/principals")

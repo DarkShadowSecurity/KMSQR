@@ -20,6 +20,7 @@ from app.storage.migrate import run_migrations
 from app.custody import PassphraseCustodian
 from app.crypto.signatures import HybridSigner
 from app.api.auth import TokenAuth, SCOPES_ADMIN, SCOPES_READ
+from app.api.authz import Authorizer
 from app.api.routes import build_router
 
 
@@ -116,7 +117,7 @@ def test_legacy_token_backfilled_with_principal(tmp_path):
     run_migrations(engine)
 
     with engine.connect() as c:
-        assert c.exec_driver_sql("SELECT version_num FROM alembic_version").fetchone()[0] == "0002"
+        assert c.exec_driver_sql("SELECT version_num FROM alembic_version").fetchone()[0] == "0003"
         pid = c.exec_driver_sql("SELECT principal_id FROM api_tokens WHERE id='tid-1'").fetchone()[0]
         assert pid, "legacy token must be linked to a backfilled principal"
         name = c.exec_driver_sql("SELECT display_name FROM principals WHERE id=:p", {"p": pid}).fetchone()[0]
@@ -137,7 +138,7 @@ def _app(tmp_path):
     app = FastAPI()
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-    app.include_router(build_router(ks, audit, auth, limiter))
+    app.include_router(build_router(ks, audit, auth, Authorizer(repo), limiter))
     return app, tok, pid
 
 
