@@ -97,6 +97,8 @@ managed_keys = Table(
     Column("state", Text, nullable=False, default="enabled"),
     Column("deletion_at", Text),  # ISO8601 UTC; set while pending_deletion
     Column("origin", Text, nullable=False, default="generated"),  # 'generated' | 'imported'
+    # Optional automatic-rotation period in days. NULL = manual rotation only.
+    Column("rotation_period_days", Integer),
 )
 
 key_versions = Table(

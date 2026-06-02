@@ -81,6 +81,7 @@ All endpoints require `Authorization: Bearer <token>`.
 - `POST /api/v1/keys/import` — BYOK: import external 32-byte AES-256 material
 - `GET  /api/v1/keys/{id}/public-key` — export the public half of a sig/kem key
 - `POST /api/v1/keys/{id}/disable` · `/enable` — toggle a key's usability
+- `POST /api/v1/keys/{id}/rotation-policy` — set/clear an automatic-rotation period (days)
 - `POST /api/v1/keys/{id}/schedule-deletion` · `/cancel-deletion` — staged destruction
 - `DELETE /api/v1/keys/{id}` — destroy (after the window; `?force=true` is admin-only)
 - `POST /api/v1/keys/{id}/encrypt` — envelope-encrypt a payload
@@ -158,6 +159,12 @@ defenses enabled out of the box:
   anonymous scope set. A service may hold several tokens against one principal
   (credential rotation); disabling or deleting a principal invalidates all of
   its tokens at once. Manage via `POST/GET /api/v1/principals`.
+- **Automatic key rotation**: set a per-key rotation period
+  (`POST /keys/{id}/rotation-policy {period_days}`); a key becomes "due" once
+  that many days pass since its current version. Run `python -m app.cli.rotate
+  due` on a schedule (cron / k8s CronJob) to rotate all due keys — each rotation
+  is audited. `--dry-run` lists what would rotate. Manual rotation is unchanged
+  when no policy is set.
 - **Full key lifecycle**: keys have an explicit state — `enabled`, `disabled`,
   or `pending_deletion`. Disabled and pending keys **refuse all crypto
   operations** (HTTP 409). Deletion is staged: `schedule-deletion` sets a waiting
