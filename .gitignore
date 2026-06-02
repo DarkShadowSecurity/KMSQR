@@ -95,3 +95,6 @@ Vulnerabilities/*
 
 # Generated SBOM artifact
 sbom.cdx.json
+
+# Security scan result artifacts (scanner output, not source)
+scan-*.json

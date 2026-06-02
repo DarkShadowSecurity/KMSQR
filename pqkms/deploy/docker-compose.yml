@@ -21,7 +21,19 @@ services:
       # Optional: cap request body size (bytes; default 16777216 = 16 MiB).
       # PQKMS_MAX_BODY_BYTES: "16777216"
     ports:
-      - "8080:8080"
+      # Bind to loopback only: the single-node quickstart should not be reachable
+      # from other hosts. For remote/production access, front it with the
+      # PQC-hybrid TLS reverse proxy in docker-compose.ha.yml (or change this
+      # binding deliberately behind your own network controls).
+      - "127.0.0.1:8080:8080"
+    # Cap resources so a single container cannot exhaust the host (mirrors the
+    # limits on the pqkms service in docker-compose.ha.yml).
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
     volumes:
       - pqkms-data:/var/lib/pqkms
     healthcheck:
