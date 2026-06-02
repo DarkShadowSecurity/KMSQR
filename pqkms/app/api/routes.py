@@ -77,6 +77,11 @@ class ScheduleDeletionReq(BaseModel):
     window_days: int = Field(30, ge=0, le=365)
 
 
+class RotationPolicyReq(BaseModel):
+    # Automatic-rotation period in days; null clears the policy (manual only).
+    period_days: Optional[int] = Field(None, ge=1, le=3650)
+
+
 class EncryptReq(BaseModel):
     plaintext_b64: str = Field(..., max_length=32_000_000)  # ~24 MiB plaintext cap
     aad_b64: Optional[str] = Field(None, max_length=8192)
@@ -286,6 +291,16 @@ def build_router(ks: KeyStore, audit: AuditLog, auth: TokenAuth, authz: Authoriz
         authz.authorize_key_op(caller, OP_MANAGE, key_id)
         mk = _safe_call("key.cancel_deletion", ks.cancel_deletion, key_id)
         audit.append(caller.actor, "key.cancel_deletion", target=key_id)
+        return mk
+
+    @r.post("/keys/{key_id}/rotation-policy")
+    @limiter.limit("30/minute")
+    def set_rotation_policy(request: Request, key_id: str, req: RotationPolicyReq,
+                            caller=Depends(scope(SCOPES_MANAGE))):
+        authz.authorize_key_op(caller, OP_MANAGE, key_id)
+        mk = _safe_call("key.rotation_policy", ks.set_rotation_policy, key_id, req.period_days)
+        audit.append(caller.actor, "key.rotation_policy", target=key_id,
+                     detail={"period_days": req.period_days})
         return mk
 
     @r.delete("/keys/{key_id}")

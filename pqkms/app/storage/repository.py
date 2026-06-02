@@ -107,6 +107,33 @@ class Repository:
             )
         return res.rowcount > 0
 
+    def set_rotation_policy(self, key_id: str, period_days: Optional[int]) -> bool:
+        with self._engine.begin() as conn:
+            res = conn.execute(
+                update(managed_keys).where(managed_keys.c.id == key_id)
+                .values(rotation_period_days=period_days)
+            )
+        return res.rowcount > 0
+
+    def list_rotation_candidates(self) -> list[dict]:
+        """Enabled keys that have a rotation policy, with the current version's
+        creation time. The due/not-due decision is made by the caller (date math
+        kept out of SQL for dialect portability)."""
+        stmt = (
+            select(
+                managed_keys.c.id,
+                managed_keys.c.rotation_period_days,
+                key_versions.c.created_at.label("version_created_at"),
+            )
+            .select_from(self._current_join())
+            .where(
+                managed_keys.c.rotation_period_days.isnot(None),
+                managed_keys.c.state == "enabled",
+            )
+        )
+        with self._engine.connect() as conn:
+            return [dict(r) for r in conn.execute(stmt).mappings().fetchall()]
+
     def get_key_state(self, key_id: str) -> Optional[dict]:
         """Return {state, deletion_at} for a key, or None if it does not exist."""
         with self._engine.connect() as conn:
@@ -152,8 +179,10 @@ class Repository:
         managed_keys.c.state,
         managed_keys.c.deletion_at,
         managed_keys.c.origin,
+        managed_keys.c.rotation_period_days,
         key_versions.c.suite,
         key_versions.c.public_material,
+        key_versions.c.created_at.label("version_created_at"),
     )
 
     def _current_join(self):

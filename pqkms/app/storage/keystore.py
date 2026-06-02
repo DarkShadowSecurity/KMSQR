@@ -50,6 +50,8 @@ class ManagedKey:
     state: str = "enabled"          # 'enabled' | 'disabled' | 'pending_deletion'
     deletion_at: Optional[str] = None
     origin: str = "generated"        # 'generated' | 'imported'
+    rotation_period_days: Optional[int] = None
+    last_rotated_at: Optional[str] = None  # current version's creation time
 
 
 # Lifecycle states.
@@ -349,6 +351,41 @@ class KeyStore:
             "public_key_b64": mk.public_material,
         }
 
+    # ---- automatic rotation policy ----
+
+    def set_rotation_policy(self, key_id: str, period_days: Optional[int]) -> "ManagedKey":
+        """Set (or clear, with None) a key's automatic-rotation period in days."""
+        if not self.get_key(key_id):
+            raise KeyError(key_id)
+        if period_days is not None and (period_days < 1 or period_days > 3650):
+            raise ValueError("rotation_period_days must be between 1 and 3650, or null to clear")
+        self.repo.set_rotation_policy(key_id, period_days)
+        return self.get_key(key_id)
+
+    def rotation_due(self, now: Optional[datetime] = None) -> list[str]:
+        """Return the ids of enabled keys whose rotation period has elapsed since
+        their current version was created."""
+        from datetime import timedelta
+        now = now or datetime.now(timezone.utc)
+        due: list[str] = []
+        for c in self.repo.list_rotation_candidates():
+            period = c.get("rotation_period_days")
+            created = c.get("version_created_at")
+            if not period or not created:
+                continue
+            if now >= datetime.fromisoformat(created) + timedelta(days=period):
+                due.append(c["id"])
+        return due
+
+    def rotate_due(self, now: Optional[datetime] = None) -> list[str]:
+        """Rotate every key that is due. Returns the ids that were rotated."""
+        self._require_unlocked()
+        rotated: list[str] = []
+        for key_id in self.rotation_due(now):
+            self.rotate(key_id)
+            rotated.append(key_id)
+        return rotated
+
     def _generate_material(self, key_type: str):
         if key_type == "aead":
             return Suite.AES256_GCM, AEAD.generate_key(), None
@@ -371,6 +408,8 @@ class KeyStore:
             state=r.get("state") or KEY_ENABLED,
             deletion_at=r.get("deletion_at"),
             origin=r.get("origin") or "generated",
+            rotation_period_days=r.get("rotation_period_days"),
+            last_rotated_at=r.get("version_created_at"),
         )
 
     def list_keys(self, *, limit: int = 200, offset: int = 0) -> list[ManagedKey]:
