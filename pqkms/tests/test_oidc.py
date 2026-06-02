@@ -111,6 +111,39 @@ def test_verify_id_token_rejects_expired():
         client.verify_id_token(sign(_claims(exp=int(time.time()) - 10)), "N")
 
 
+def test_verify_id_token_rejects_alg_confusion():
+    """An attacker who knows the public key must not be able to forge a token by
+    signing it HS256 with that public key as the HMAC secret. Algorithms are
+    pinned to asymmetric, so this is rejected. (We hand-craft the HS256 token
+    because PyJWT's own encode() refuses to HMAC-sign with a PEM key.)"""
+    import base64, hashlib, hmac, json as _json
+    from cryptography.hazmat.primitives import serialization
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pub_pem = key.public_key().public_bytes(
+        serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+
+    def _b64u(b: bytes) -> str:
+        return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+    def _b64u_int(n):
+        b = n.to_bytes((n.bit_length() + 7) // 8, "big")
+        return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+    nums = key.public_key().public_numbers()
+    jwks = {"keys": [{"kty": "RSA", "kid": "test-kid", "alg": "RS256",
+                      "n": _b64u_int(nums.n), "e": _b64u_int(nums.e)}]}
+    header = _b64u(_json.dumps({"alg": "HS256", "kid": "test-kid", "typ": "JWT"}).encode())
+    payload = _b64u(_json.dumps(_claims()).encode())
+    signing_input = f"{header}.{payload}".encode()
+    sig = _b64u(hmac.new(pub_pem, signing_input, hashlib.sha256).digest())
+    forged = f"{header}.{payload}.{sig}"
+
+    client = OidcClient(_config(), jwks=jwks)
+    with pytest.raises(OidcError):
+        client.verify_id_token(forged, "N")
+
+
 def test_claims_to_scopes_admin_group():
     client = OidcClient(_config())
     assert client.claims_to_scopes(_claims(groups=["kms-admins"])) == {SCOPES_ADMIN}

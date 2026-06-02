@@ -152,26 +152,35 @@ class OidcClient:
             raise OidcError(f"token endpoint returned {resp.status_code}")
         return resp.json()
 
+    # Asymmetric algorithms only. NEVER include HMAC (HS*) or 'none': the verifying
+    # key is a *public* key, so allowing HS* would let an attacker forge a token by
+    # HMAC-ing with that public key (the classic JWT algorithm-confusion attack).
+    ALLOWED_ALGS = ["RS256", "RS384", "RS512", "ES256", "ES384", "ES512", "PS256", "PS384", "PS512"]
+
     def verify_id_token(self, id_token: str, expected_nonce: str) -> dict:
         import jwt
         from jwt import PyJWKClient, PyJWK
 
         try:
-            header = jwt.get_unverified_header(id_token)
-            kid = header.get("kid")
-            alg = header.get("alg", "RS256")
+            kid = jwt.get_unverified_header(id_token).get("kid")
             if self._jwks is not None:
-                key = None
+                matched = None
                 for k in self._jwks.get("keys", []):
-                    if k.get("kid") == kid or kid is None:
-                        key = PyJWK.from_dict(k).key
+                    if kid is None or k.get("kid") == kid:
+                        matched = k
                         break
-                if key is None:
+                if matched is None:
                     raise OidcError("no matching JWKS key for id_token")
+                key = PyJWK.from_dict(matched).key
+                # Trust the algorithm advertised by the JWK (if allowed), not the
+                # token header; otherwise fall back to the asymmetric allowlist.
+                jwk_alg = matched.get("alg")
+                algorithms = [jwk_alg] if jwk_alg in self.ALLOWED_ALGS else self.ALLOWED_ALGS
             else:
                 key = PyJWKClient(self.discovery()["jwks_uri"]).get_signing_key_from_jwt(id_token).key
+                algorithms = self.ALLOWED_ALGS
             claims = jwt.decode(
-                id_token, key, algorithms=[alg],
+                id_token, key, algorithms=algorithms,
                 audience=self.config.client_id, issuer=self.config.issuer,
                 options={"require": ["exp", "iat", "aud", "iss"]},
             )
