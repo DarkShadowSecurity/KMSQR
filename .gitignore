@@ -92,3 +92,6 @@ sboms/
 # remediation doc explicitly.
 Vulnerabilities/*
 !Vulnerabilities/REMEDIATION.md
+
+# Generated SBOM artifact
+sbom.cdx.json

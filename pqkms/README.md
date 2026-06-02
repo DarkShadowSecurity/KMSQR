@@ -267,6 +267,15 @@ Before trusting it with real secrets, also:
 \* Required for the `passphrase` custody backend; supply it via `PQKMS_PASSPHRASE`
 or `PQKMS_PASSPHRASE_FILE`.
 
+## Documentation
+
+- [docs/ENTERPRISE_READINESS.md](docs/ENTERPRISE_READINESS.md) — what's implemented vs external dependencies
+- [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) — assets, trust boundaries, adversaries, non-goals
+- [docs/CRYPTOGRAPHY.md](docs/CRYPTOGRAPHY.md) — suites, key hierarchy, wire formats
+- [docs/COMPLIANCE.md](docs/COMPLIANCE.md) — FIPS boundary statement + SOC2/ISO/PCI control mapping
+- [docs/DR.md](docs/DR.md) — backup/restore, RTO/RPO, continuity drills
+- [deploy/RUNBOOK.md](deploy/RUNBOOK.md) · [deploy/RELEASE.md](deploy/RELEASE.md) — operations & release/SBOM/signing
+
 ## License
 
 PQ-KMS is free and open-source software, released under the **MIT License**.
