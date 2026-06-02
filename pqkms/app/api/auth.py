@@ -10,7 +10,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from typing import Optional
-from fastapi import HTTPException, Header
+from fastapi import HTTPException, Request
 
 from ..storage.repository import Repository
 
@@ -184,17 +184,45 @@ class TokenAuth:
         return caller.scopes if caller is not None else None
 
 
-def require_scope(auth: TokenAuth, required: str):
-    def dep(authorization: str = Header(None)) -> Caller:
-        if not authorization or not authorization.startswith("Bearer "):
-            raise HTTPException(401, "missing bearer token")
-        token = authorization[len("Bearer "):].strip()
-        caller = auth.authenticate(token)
+def resolve_caller(request: Request, auth: "TokenAuth", sessions=None) -> Optional[Caller]:
+    """Authenticate a request via either an Authorization bearer token (machine
+    clients) or — if a SessionManager is provided — a signed session cookie (human
+    operators logged in via OIDC SSO). Bearer takes precedence."""
+    header = request.headers.get("authorization")
+    if header and header.startswith("Bearer "):
+        return auth.authenticate(header[len("Bearer "):].strip())
+    if sessions is not None:
+        from .sessions import SESSION_COOKIE
+        cookie = request.cookies.get(SESSION_COOKIE)
+        if cookie:
+            sess = sessions.verify(cookie)
+            if sess and sess.get("principal_id"):
+                return Caller(
+                    principal_id=sess["principal_id"],
+                    display_name=sess.get("sub"),
+                    scopes=set(sess.get("scopes") or []),
+                )
+    return None
+
+
+def require_scope(auth: TokenAuth, required: str, sessions=None):
+    def dep(request: Request) -> Caller:
+        caller = resolve_caller(request, auth, sessions)
         if caller is None:
-            raise HTTPException(401, "invalid token")
+            raise HTTPException(401, "invalid or missing credentials")
         if caller.is_admin:
             return caller
         if required not in caller.scopes:
             raise HTTPException(403, f"token missing scope: {required}")
+        return caller
+    return dep
+
+
+def require_auth(auth: TokenAuth, sessions=None):
+    """Authenticated caller with no specific scope requirement (e.g. /auth/me)."""
+    def dep(request: Request) -> Caller:
+        caller = resolve_caller(request, auth, sessions)
+        if caller is None:
+            raise HTTPException(401, "invalid or missing credentials")
         return caller
     return dep
