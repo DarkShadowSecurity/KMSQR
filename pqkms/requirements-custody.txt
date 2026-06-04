@@ -7,6 +7,6 @@
 #
 # The 'shamir' backend is self-contained and needs no extra dependency.
 
-boto3>=1.35,<2
+boto3>=1.43.22,<2
 google-cloud-kms>=3,<4
 python-pkcs11>=0.7,<1
