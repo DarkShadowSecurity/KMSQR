@@ -31,7 +31,7 @@ jobs:
 
       - name: Initialize CodeQL
         # github/codeql-action v3.27.0 — pinned by SHA.
-        uses: github/codeql-action/init@662472033e021d55d94146f66f6058822b0b39fd
+        uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e
         with:
           languages: python
           # 'security-extended' adds higher-recall security queries beyond the
@@ -39,9 +39,9 @@ jobs:
           queries: security-extended
 
       - name: Autobuild
-        uses: github/codeql-action/autobuild@662472033e021d55d94146f66f6058822b0b39fd
+        uses: github/codeql-action/autobuild@8aad20d150bbac5944a9f9d289da16a4b0d87c1e
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@662472033e021d55d94146f66f6058822b0b39fd
+        uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e
         with:
           category: "/language:python"
