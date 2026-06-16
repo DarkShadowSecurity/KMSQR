@@ -21,7 +21,7 @@ alembic==1.18.4
 # talks to the IdP (discovery / token / JWKS) and PyJWT verifies the id_token
 # signature. Machine clients keep using bearer tokens, which need neither.
 httpx==0.28.1
-PyJWT[crypto]==2.12.1
+PyJWT[crypto]==2.13.0
 # Prometheus metrics exposition for /metrics.
 prometheus-client==0.25.0
 # liboqs-python: post-quantum primitives. Version must match the C liboqs
