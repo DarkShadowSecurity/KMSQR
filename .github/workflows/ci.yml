@@ -25,7 +25,7 @@ jobs:
     steps:
       - name: Checkout
         # actions/checkout v4.2.2 — pinned by SHA (Dependabot will bump this).
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
       - name: Set up Python
         # actions/setup-python v5.3.0 — pinned by SHA.
         uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
@@ -59,7 +59,7 @@ jobs:
       LIBOQS_REF: "0.15.0"
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
       - name: Set up Python
         uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
         with:
