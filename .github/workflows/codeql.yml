@@ -27,7 +27,7 @@ jobs:
     steps:
       - name: Checkout
         # actions/checkout v4.2.2 — pinned by SHA (Dependabot will bump this).
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
       - name: Initialize CodeQL
         # github/codeql-action v3.27.0 — pinned by SHA.
