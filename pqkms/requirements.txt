@@ -1,5 +1,5 @@
-fastapi==0.136.3
-uvicorn[standard]==0.48.0
+fastapi==0.139.0
+uvicorn[standard]==0.49.0
 pydantic==2.13.4
 # cryptography pinned to >= 46.0.7 to pick up:
 #   GHSA-79v4-65xg-pq4g (CVE-2024-12797 OpenSSL bundled in wheels, fixed 44.0.1)
@@ -8,20 +8,20 @@ pydantic==2.13.4
 #   GHSA-p423-j2cm-9vmq (CVE-2026-39892 non-contiguous buffer overflow, fixed 46.0.7)
 cryptography==48.0.0
 argon2-cffi==25.1.0
-slowapi==0.1.9
+slowapi==0.1.10
 # SQLAlchemy Core is the storage abstraction (SQLite by default; PostgreSQL via
 # PQKMS_DB_URL for HA). The PostgreSQL driver (psycopg) is an optional extra
 # installed only when targeting Postgres (see requirements-ha.txt).
-SQLAlchemy==2.0.50
+SQLAlchemy==2.0.51
 # Alembic owns the database schema: every change ships as a versioned, reversible
 # migration applied automatically on startup (and runnable via the `alembic` CLI
 # for operators). Replaces ad-hoc create_all/ALTER so upgrades are auditable.
-alembic==1.18.4
+alembic==1.18.5
 # OIDC SSO for human operators (optional, opt-in via PQKMS_OIDC_ENABLED): httpx
 # talks to the IdP (discovery / token / JWKS) and PyJWT verifies the id_token
 # signature. Machine clients keep using bearer tokens, which need neither.
 httpx==0.28.1
-PyJWT[crypto]==2.12.1
+PyJWT[crypto]==2.13.0
 # Prometheus metrics exposition for /metrics.
 prometheus-client==0.25.0
 # liboqs-python: post-quantum primitives. Version must match the C liboqs
